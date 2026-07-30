@@ -36,10 +36,10 @@ void main()
         col.g = texture(uScene, uv + t).g;
         col.b = texture(uScene, uv + offB + t).b;
         acc += col;
-        bloomAcc += max(col - vec3(0.68), vec3(0.0));
+        bloomAcc += max(col - vec3(0.88), vec3(0.0));
     }
     vec3 blur = acc / 8.0;
-    vec3 bloom = (bloomAcc / 8.0) * 1.25;
+    vec3 bloom = (bloomAcc / 8.0) * 0.45;
 
     vec3 sharp;
     sharp.r = texture(uScene, uv + offR).r;

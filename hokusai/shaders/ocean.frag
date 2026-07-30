@@ -138,10 +138,10 @@ void main()
     float G = G_Smith(float(NoV), NoL, roughness);
     vec3 specularReflectance = F * D * G / max(4.0 * NoV * NoL, 1e-4) * uSunColor * NoL;
 
-    // Fresnel Sky Reflection (Rich Deep Blue Sky)
+    // Fresnel Sky Reflection & Cook-Torrance Specular (Controlled specular intensity)
     vec3 R = reflect(-V, N);
-    vec3 skyReflection = mix(skyRadiance * 0.7, skyRadiance * 1.5, pow(clamp(1.0 - R.y, 0.0, 1.0), 2.2));
-    vec3 color = body + F * skyReflection * 1.25 + specularReflectance * 1.45;
+    vec3 skyReflection = mix(skyRadiance * 0.5, skyRadiance * 1.1, pow(clamp(1.0 - R.y, 0.0, 1.0), 2.2));
+    vec3 color = body + F * skyReflection * 0.85 + specularReflectance * 0.45;
 
     // --- PHYSICAL OPTICS PATCH 4: Vivid Cyan Volumetric Subsurface Scattering ---
     {
@@ -150,25 +150,26 @@ void main()
         float g_hg = 0.78;
         float hgPhase = (1.0 - g_hg * g_hg) / pow(1.0 + g_hg * g_hg - 2.0 * g_hg * cosTheta, 1.5);
 
-        // Vivid Cyan/Emerald Subsurface Translucency through crest lips
-        vec3 sssTransmission = uSunColor * vec3(0.015, 0.450, 0.380) * hgPhase * 0.42;
+        vec3 sssTransmission = uSunColor * vec3(0.010, 0.380, 0.420) * hgPhase * 0.35;
         color += sssTransmission * crestness * (1.0 - aeratedOpacity * 0.65);
     }
 
-    // --- PHYSICAL OPTICS PATCH 5: Natural Blue-Tinted Sea Foam Light Scattering ---
+    // --- PHYSICAL OPTICS PATCH 5: Deep Blue Water Column Preserved Sea Foam ---
     vec3 foamNormal = N;
     if (uHasFoamTex == 1) {
         vec3 microNorm = texture(uFoamNormal, vUv * 7.0).rgb * 2.0 - 1.0;
         foamNormal = normalize(N + microNorm * 0.25);
     }
     float foamNoL = clamp(dot(foamNormal, L), 0.0, 1.0);
-    vec3 incidentFoamIrradiance = uSunColor * (foamNoL * 0.80 + 0.20) + skyRadiance * 0.75;
+    vec3 incidentFoamIrradiance = uSunColor * (foamNoL * 0.50 + 0.15) + skyRadiance * 0.40;
 
-    vec3 aeratedWaterCol = body * 1.6 + uSunColor * vec3(0.01, 0.25, 0.45);
-    vec3 whitecapScattering = incidentFoamIrradiance * 0.95;
+    // Aerated foam maintains deep ocean blue tint underneath without turning into milk
+    vec3 aeratedWaterCol = body * 1.2 + uSunColor * vec3(0.005, 0.15, 0.35);
+    vec3 whitecapScattering = incidentFoamIrradiance * 0.65;
     vec3 foamColor = mix(aeratedWaterCol, whitecapScattering, aeratedOpacity);
 
-    color = mix(color, foamColor, aeratedOpacity * 0.75);
+    // Subtle foam integration preventing milky washouts
+    color = mix(color, foamColor, aeratedOpacity * 0.45);
 
     // --- PHYSICAL OPTICS PATCH 6: Entrained Micro-Bubbles (Continuous Glints) ---
     if (airFraction > 0.001) {
@@ -184,10 +185,10 @@ void main()
 
         vec3 bubbleNormal = normalize(vec3((f - c) * 1.5, sqrt(max(1.0 - clamp(d2, 0.0, 0.99), 0.01))));
         float bubbleNoL = clamp(dot(bubbleNormal, L), 0.0, 1.0);
-        vec3 bubbleSpecular = uSunColor * pow(clamp(dot(reflect(-L, bubbleNormal), V), 0.0, 1.0), 18.0);
+        vec3 bubbleSpecular = uSunColor * pow(clamp(dot(reflect(-L, bubbleNormal), V), 0.0, 1.0), 18.0) * 0.30;
 
-        vec3 bubbleColor = mix(foamColor, incidentFoamIrradiance * bubbleNoL + bubbleSpecular, 0.35);
-        color = mix(color, bubbleColor, bubbleIntensity * aeratedOpacity * 0.40);
+        vec3 bubbleColor = mix(foamColor, incidentFoamIrradiance * bubbleNoL + bubbleSpecular, 0.25);
+        color = mix(color, bubbleColor, bubbleIntensity * aeratedOpacity * 0.25);
     }
 
     // Atmospheric Distance Fog
