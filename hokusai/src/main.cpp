@@ -43,6 +43,7 @@
 #include <chrono>
 #include <vector>
 #include <string>
+#include <fstream>
 
 #include "bathymetry.h"
 #include "ocean.h"
@@ -313,6 +314,7 @@ int main(int argc, char** argv)
     printf("[render] %d pipelines x %d frames %dx%d @ %d fps (sim x%.1f)\n",
            (int)pipes.size(), frames, width, height, fps, timeScale);
 
+    std::ofstream audioPhysFile("data/audio_physics.txt");
     for (int f = 0; f < frames; ++f) {
         // Playback time is LOCKED to the container frame rate: one playback
         // second advances the simulation by exactly timeScale seconds, for
@@ -392,8 +394,12 @@ int main(int argc, char** argv)
         // ---- spray droplets: A/B emitter scan (bench), shared ballistic
         //      step, A/B grid projection (bench + identity check) ----------
         const float simDt = timeScale / (float)fps;
-        spray.scan(tradOcean.foam(), 0, 0);
-        spray.scan(tradOcean.foam(), 1, 0);
+        spray.scan(tradOcean.foam(), tradOcean.height(), 0, 0);
+        spray.scan(tradOcean.foam(), tradOcean.height(), 1, 0);
+        const int nEmit = spray.emitterCountHost();
+        if (audioPhysFile.is_open()) {
+            audioPhysFile << f << " " << t << " " << gust << " " << tWave << " " << nEmit << "\n";
+        }
         spray.step(tide, simDt, f, tradOcean.height(), 0);
         spray.project(0, 0, 0);
         spray.project(1, 1, 0);

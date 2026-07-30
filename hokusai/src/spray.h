@@ -33,7 +33,7 @@ struct SprayConfig {
 class Spray {
 public:
     void init(const SprayConfig& cfg);
-    void scan(const float* dFoam, int variant, cudaStream_t stream = 0);
+    void scan(const float* dFoam, const float* dHeight, int variant, cudaStream_t stream = 0);
     int  emitterCountHost();              // clamped count (D2H of 1 int)
     const int* emitterList() { return d_emitList; }
     void step(float tide, float dt, int frame, const float* dHeight,

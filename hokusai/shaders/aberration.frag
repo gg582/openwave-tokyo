@@ -27,10 +27,10 @@ void main()
     float r2 = dot(c, c) * 4.0;         // 0 center .. ~2 corners
     float r4 = r2 * r2;
 
-    // lateral chromatic aberration: per-channel radial dispersion
-    float k = uAmount * 0.0035;
-    vec2 offR = c * (k * r2);
-    vec2 offB = -c * (k * r2);
+    // lateral chromatic aberration: per-channel radial dispersion (disabled)
+    float k = 0.0;
+    vec2 offR = vec2(0.0);
+    vec2 offB = vec2(0.0);
 
     // spherical blur: 8-tap Poisson disc, radius ~ r^4 (sharp center)
     float rad = uAmount * r4 * 1.5;

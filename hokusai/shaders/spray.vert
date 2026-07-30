@@ -18,16 +18,27 @@ out float vAlpha;
 out float vSize;
 out float vLight;
 out vec2  vSunXY;
+out float vEccentricity;
 
 void main()
 {
-    vAlpha = aPosAlpha.w;
+    // Unpack alpha and Aspect Ratio (E) from the packed float in aPosAlpha.w
+    float packedVal = aPosAlpha.w;
+    float rawAlpha = floor(packedVal / 256.0) / 255.0;
+    float E = mod(packedVal, 256.0) / 255.0;
+    if (E <= 0.01) E = 1.0;
+    
     vSize = aSize;
+    vEccentricity = E;
     gl_Position = uViewProj * vec4(aPosAlpha.xyz, 1.0);
     float dist = max(gl_Position.w, 1.0);
-    // physical diameter projected to pixels with an artistic telephoto exaggeration boost (18.0x)
-    // and a robust minimum point size of 3.8 pixels so clusters remain visible as physical spray mist.
-    gl_PointSize = clamp(uPointScale * max(aSize, 0.015) * 18.0 / dist, 3.8, uMaxPx);
+    // Physical diameter projected to pixels with a realistic scaling (0.6x)
+    // and a very low minimum size of 0.8 pixels. This blends discrete 'balls'
+    // into a soft, continuous spindrift mist.
+    gl_PointSize = clamp(uPointScale * max(aSize, 0.004) * 0.6 / dist, 0.8, uMaxPx);
+    
+    // Soften alpha for small particles to create a smooth volumetric mist effect
+    vAlpha = rawAlpha * clamp(gl_PointSize / 3.0, 0.05, 1.0);
 
     // screen-space sun azimuth: where the highlight sits on each hollow film
     vec4 sp = uViewProj * vec4(normalize(uSunDir), 0.0);
