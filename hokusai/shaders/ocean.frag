@@ -97,28 +97,24 @@ void main()
     float NoH = clamp(dot(N, H), 0.0, 1.0);
     float VoH = clamp(dot(V, H), 0.0, 1.0);
 
-    // --- PHYSICAL OPTICS PATCH 1: Deep Ocean Optical Extinction (Jerlov Type I Open Water) ---
-    // Extinction coefficients (1/m): Red=0.550 (rapidly absorbed), Green=0.065, Blue=0.008 (deep penetration)
-    const vec3 JerlovI_Sigma = vec3(0.550, 0.065, 0.008);
+    // --- REALISTIC OCEAN COLORING OPTICS ---
+    // Deep Ocean Water Extinction (Jerlov Type I Water Column)
+    const vec3 JerlovI_Sigma = vec3(0.480, 0.055, 0.005);
     float bathyDepth = max(texture(uDepth, vUv).r, 0.5);
     float surfaceHgt = texture(uHeight, vUv).r;
     float totalWaterColumn = max(bathyDepth + max(surfaceHgt, 0.0), 0.2);
 
-    // Path length accounting for slanted viewing angle
     float pathLen = totalWaterColumn / max(NoV, 0.12);
     vec3 waterTransmittance = exp(-JerlovI_Sigma * pathLen);
 
-    // --- PHYSICAL OPTICS PATCH 2: Rich Deep Ocean Rayleigh Sky Radiance ---
-    // Deep vibrant ocean blue sky radiance spectrum
-    vec3 skyRadiance = uSunColor * vec3(0.04, 0.22, 0.72) * (0.80 + 0.40 * graze);
+    // Deep Oceanic Sky Reflection & Scattering Radiance (Rich Navy/Deep Cobalt Blue)
+    vec3 skyRadiance = uSunColor * vec3(0.02, 0.18, 0.68) * (0.85 + 0.35 * graze);
+    vec3 deepUpwelling = uSunColor * vec3(0.002, 0.065, 0.320) * (0.45 + 0.55 * NoL);
 
-    // Upwelling ocean radiance (Rich Deep Indigo Blue)
-    vec3 deepUpwelling = uSunColor * vec3(0.004, 0.045, 0.240) * (0.40 + 0.60 * NoL);
-
-    // Shallow seabed reflectance
-    vec3 seabedAlbedo = vec3(0.22, 0.20, 0.15);
+    // Seabed blending in shallow water
+    vec3 seabedAlbedo = vec3(0.20, 0.18, 0.12);
     if (uHasFoamTex == 1) {
-        seabedAlbedo = texture(uFoamAlbedo, vWorld.xz * 0.08).rgb * vec3(0.50, 0.45, 0.35);
+        seabedAlbedo = texture(uFoamAlbedo, vWorld.xz * 0.08).rgb * vec3(0.45, 0.40, 0.30);
     }
     vec2 depthGrad = vec2(dFdx(bathyDepth), dFdy(bathyDepth));
     vec3 seabedIllum = uSunColor * NoL * seabedAlbedo * (1.0 - clamp(length(depthGrad) * 6.0, 0.0, 0.50));
@@ -127,51 +123,50 @@ void main()
     float seabedVisibility = exp(-0.25 * bathyDepth) * pow(1.0 - graze, 1.5);
     vec3 body = mix(deepUpwelling * waterTransmittance, seabedReflectance, seabedVisibility);
 
-    // --- PHYSICAL OPTICS PATCH 3: Continuous Air Entrainment & Optical Foam Volume ---
+    // Air Entrainment Foam Thickness
     float airFraction = texture(uFoam, vUv).r;
-    float aeratedOpacity = 1.0 - exp(-2.8 * max(airFraction, 0.0));
+    float aeratedOpacity = 1.0 - exp(-3.2 * max(airFraction, 0.0));
 
-    // --- Cook-Torrance Specular Reflection --------------------------------
-    float roughness = mix(0.025, 0.60, aeratedOpacity);
+    // Specular Highlight & Fresnel Sky Reflection
+    float roughness = mix(0.02, 0.55, aeratedOpacity);
     vec3 F = F_Schlick(VoH, vec3(F0));
     float D = D_GGX(NoH, roughness);
     float G = G_Smith(float(NoV), NoL, roughness);
     vec3 specularReflectance = F * D * G / max(4.0 * NoV * NoL, 1e-4) * uSunColor * NoL;
 
-    // Fresnel Sky Reflection & Cook-Torrance Specular (Controlled specular intensity)
     vec3 R = reflect(-V, N);
-    vec3 skyReflection = mix(skyRadiance * 0.5, skyRadiance * 1.1, pow(clamp(1.0 - R.y, 0.0, 1.0), 2.2));
-    vec3 color = body + F * skyReflection * 0.85 + specularReflectance * 0.45;
+    vec3 skyReflection = mix(skyRadiance * 0.6, skyRadiance * 1.3, pow(clamp(1.0 - R.y, 0.0, 1.0), 2.2));
+    vec3 color = body + F * skyReflection * 1.10 + specularReflectance * 0.75;
 
-    // --- PHYSICAL OPTICS PATCH 4: Vivid Cyan Volumetric Subsurface Scattering ---
+    // Crest Subsurface Scattering (Vivid Turquoise/Emerald Lip)
     {
-        float crestness = smoothstep(0.2, 5.0, max(surfaceHgt, 0.0));
+        float crestness = smoothstep(0.1, 4.5, max(surfaceHgt, 0.0));
         float cosTheta = dot(-V, L);
-        float g_hg = 0.78;
+        float g_hg = 0.76;
         float hgPhase = (1.0 - g_hg * g_hg) / pow(1.0 + g_hg * g_hg - 2.0 * g_hg * cosTheta, 1.5);
 
-        vec3 sssTransmission = uSunColor * vec3(0.010, 0.380, 0.420) * hgPhase * 0.35;
-        color += sssTransmission * crestness * (1.0 - aeratedOpacity * 0.65);
+        vec3 sssTransmission = uSunColor * vec3(0.008, 0.420, 0.460) * hgPhase * 0.45;
+        color += sssTransmission * crestness * (1.0 - aeratedOpacity * 0.50);
     }
 
-    // --- PHYSICAL OPTICS PATCH 5: Deep Blue Water Column Preserved Sea Foam ---
+    // Realistic Crisp Sea Foam Light Scattering (Natural Oceanic Foam Contrast)
     vec3 foamNormal = N;
     if (uHasFoamTex == 1) {
         vec3 microNorm = texture(uFoamNormal, vUv * 7.0).rgb * 2.0 - 1.0;
-        foamNormal = normalize(N + microNorm * 0.25);
+        foamNormal = normalize(N + microNorm * 0.30);
     }
     float foamNoL = clamp(dot(foamNormal, L), 0.0, 1.0);
-    vec3 incidentFoamIrradiance = uSunColor * (foamNoL * 0.50 + 0.15) + skyRadiance * 0.40;
+    vec3 incidentFoamIrradiance = uSunColor * (foamNoL * 0.75 + 0.25) + skyRadiance * 0.65;
 
-    // Aerated foam maintains deep ocean blue tint underneath without turning into milk
-    vec3 aeratedWaterCol = body * 1.2 + uSunColor * vec3(0.005, 0.15, 0.35);
-    vec3 whitecapScattering = incidentFoamIrradiance * 0.65;
-    vec3 foamColor = mix(aeratedWaterCol, whitecapScattering, aeratedOpacity);
+    // Realistic Sea Foam Albedo (Illuminated by scene light, retaining water undertone)
+    vec3 foamBaseAlbedo = vec3(0.82, 0.88, 0.94);
+    if (uHasFoamTex == 1) {
+        foamBaseAlbedo = texture(uFoamAlbedo, vUv * 7.0).rgb * vec3(0.90, 0.95, 1.00);
+    }
+    vec3 foamColor = foamBaseAlbedo * incidentFoamIrradiance;
+    color = mix(color, foamColor, aeratedOpacity * 0.68);
 
-    // Subtle foam integration preventing milky washouts
-    color = mix(color, foamColor, aeratedOpacity * 0.45);
-
-    // --- PHYSICAL OPTICS PATCH 6: Entrained Micro-Bubbles (Continuous Glints) ---
+    // Entrained Micro-Bubbles (Glints & Refraction)
     if (airFraction > 0.001) {
         vec2 buv = vWorld.xz * 6.0;
         vec2 cellId = floor(buv);
@@ -185,16 +180,16 @@ void main()
 
         vec3 bubbleNormal = normalize(vec3((f - c) * 1.5, sqrt(max(1.0 - clamp(d2, 0.0, 0.99), 0.01))));
         float bubbleNoL = clamp(dot(bubbleNormal, L), 0.0, 1.0);
-        vec3 bubbleSpecular = uSunColor * pow(clamp(dot(reflect(-L, bubbleNormal), V), 0.0, 1.0), 18.0) * 0.30;
+        vec3 bubbleSpecular = uSunColor * pow(clamp(dot(reflect(-L, bubbleNormal), V), 0.0, 1.0), 18.0) * 0.40;
 
-        vec3 bubbleColor = mix(foamColor, incidentFoamIrradiance * bubbleNoL + bubbleSpecular, 0.25);
-        color = mix(color, bubbleColor, bubbleIntensity * aeratedOpacity * 0.25);
+        vec3 bubbleColor = mix(foamColor, incidentFoamIrradiance * bubbleNoL + bubbleSpecular, 0.30);
+        color = mix(color, bubbleColor, bubbleIntensity * aeratedOpacity * 0.30);
     }
 
     // Atmospheric Distance Fog
     float cameraDist = length(uCamPos - vWorld);
-    float atmosphericHaze = 1.0 - exp(-cameraDist * 0.00032);
-    color = mix(color, skyRadiance * 1.10, atmosphericHaze);
+    float atmosphericHaze = 1.0 - exp(-cameraDist * 0.00030);
+    color = mix(color, skyRadiance * 1.05, atmosphericHaze);
 
     fragColor = vec4(color, 1.0);
 }
