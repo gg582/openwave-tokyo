@@ -5,7 +5,7 @@
 #include <vector>
 
 struct TerrainMesh {
-    std::vector<float>    verts;    // pos.xyz + elevation, stride 4
+    std::vector<float>    verts;    // pos.xyz, elev, normal.xyz, reserved (stride 8)
     std::vector<unsigned> idx;
     int gridW = 0, gridH = 0;
 };

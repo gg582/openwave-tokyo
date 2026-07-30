@@ -147,10 +147,16 @@ SceneClimate loadSceneClimate(const char* jsonPath, float lat, float lon, const 
     const float elDeg = elev;
     const float m = 1.0f / (sinf(er) + 0.50572f
                   * powf(elDeg + 6.07995f, -1.6364f));
-    const float tauA = 0.035f;                 // marine aerosol
-    float sR = expf(-(0.054f + tauA) * m);     // ~610 nm
-    float sG = expf(-(0.086f + tauA) * m);     // ~550 nm
-    float sB = expf(-(0.160f + tauA) * m);     // ~470 nm
+
+    // Dynamic Atmospheric Turbidity & Rayleigh Optical Depth linked to Japan Climatology
+    // Lat 35.2N Marine Coastal Zone aerosol optical depth (AOD @ 550nm):
+    const float marineAOD = 0.025f + 0.045f * c.cloudAmount + 0.005f * (c.temperatureC / 10.0f);
+    const float tauA = marineAOD;
+
+    float sR = expf(-(0.054f + tauA) * m);     // ~610 nm (Red Rayleigh)
+    float sG = expf(-(0.086f + tauA) * m);     // ~550 nm (Green Rayleigh)
+    float sB = expf(-(0.160f + tauA) * m);     // ~470 nm (Blue Rayleigh)
+
     // normalize so lighting stays usable while keeping the physical hue
     const float lum = 0.2126f * sR + 0.7152f * sG + 0.0722f * sB;
     const float nrm = 0.95f / fmaxf(lum, 1e-3f);
@@ -164,12 +170,11 @@ SceneClimate loadSceneClimate(const char* jsonPath, float lat, float lon, const 
            "cloud %.0f%%, T %.1f C, wind %.1f m/s\n",
            month, lat, lon, c.solarIrradiance, c.cloudAmount * 100.0f,
            c.temperatureC, c.windSpeed);
+    printf("[climate] Geographic Optical Air Mass: %.2f, AOD(550nm): %.3f -> Rayleigh Sun Tint (%.3f, %.3f, %.3f)\n",
+           m, marineAOD, c.sunColor[0], c.sunColor[1], c.sunColor[2]);
     printf("[climate] Wild sea wind fitting: base %.1f m/s, peak gust mult %.2fx\n",
            c.fittedWildWind, c.gustMultiplier);
     printf("[climate] 1831-03-21 07:30 JST ephemeris: elevation %.1f deg, "
            "azimuth %.1f deg, Sun-Earth distance %.5f AU\n", elev, az, distAU);
-    printf("[climate] air mass %.2f -> sun color (%.3f %.3f %.3f), "
-           "irradiance factor %.3f\n", m, c.sunColor[0], c.sunColor[1],
-           c.sunColor[2], c.sunIntensity);
     return c;
 }

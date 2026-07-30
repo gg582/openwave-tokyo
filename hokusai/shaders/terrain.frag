@@ -7,11 +7,13 @@
 // ============================================================================
 in vec3 vWorld;
 in float vElev;
+in vec3 vNormal;
 out vec4 fragColor;
 
 uniform sampler2D uRockTex;
 uniform vec3  uCamPos;
 uniform vec3  uSunDir;
+uniform vec3  uSunColor;
 uniform vec3  uHorizonCol;
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -23,39 +25,77 @@ float noise(vec2 p)
                mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
 }
 
+vec3 sampleTriplanar(sampler2D tex, vec3 p, vec3 weights, float sc)
+{
+    vec3 xT = texture(tex, p.yz * sc).rgb;
+    vec3 yT = texture(tex, p.xz * sc).rgb;
+    vec3 zT = texture(tex, p.xy * sc).rgb;
+    return xT * weights.x + yT * weights.y + zT * weights.z;
+}
+
 void main()
 {
-    vec3 N = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
+    // 1. Smooth Analytic Normal
+    vec3 N = normalize(vNormal);
     if (N.y < 0.0) N = -N;
+
     vec3 L = normalize(uSunDir);
+    vec3 V = normalize(uCamPos - vWorld);
     float NoL = clamp(dot(N, L), 0.0, 1.0);
 
-    // photographed rock in world-space tiling, natural warm-gray grade
-    vec3 rockTex = texture(uRockTex, vWorld.xz * 0.0018).rgb;
-    float lum = dot(rockTex, vec3(0.299, 0.587, 0.114));
-    vec3 rock = rockTex * vec3(0.95, 0.90, 0.85) * (0.6 + 0.8 * lum);
+    // 2. Triplanar Texturing
+    vec3 blendWeights = pow(abs(N), vec3(4.0));
+    blendWeights /= (blendWeights.x + blendWeights.y + blendWeights.z + 1e-4);
 
-    // snow cover: elevation-driven with ragged noise edge, thins on steeps
-    float ragged = noise(vWorld.xz * 0.004) * 350.0;
-    float snowLine = 2250.0 + ragged;
-    float snow = smoothstep(snowLine - 120.0, snowLine + 120.0, vElev);
-    snow *= smoothstep(0.25, 0.55, N.y);          // sheds on steep flanks
-    // streaks running downhill
-    snow = clamp(snow + 0.25 * smoothstep(0.6, 0.9,
-                    noise(vWorld.xz * vec2(0.02, 0.002)))
-                    * smoothstep(snowLine - 500.0, snowLine, vElev),
-                 0.0, 1.0);
-    vec3 snowC = vec3(0.905, 0.910, 0.900);
-
-    vec3 col = mix(rock, snowC, snow) * (0.35 + 0.65 * NoL);
-
-    // aerial perspective: ~70 km of atmosphere between camera and peak
     float dist = length(uCamPos - vWorld);
-    float haze = 1.0 - exp(-dist * 0.000012);
+    float scale = 0.0005;
+
+    vec3 rockTex = sampleTriplanar(uRockTex, vWorld, blendWeights, scale);
+    vec3 rockAlbedo = clamp(rockTex * 0.45, vec3(0.04), vec3(0.40));
+
+    // 3. Fuji Volcanic Soil
+    vec3 kurobokudoSoil = rockAlbedo * vec3(0.35, 0.32, 0.28);
+    vec3 akatsuchiScoria = rockAlbedo * vec3(0.65, 0.45, 0.35);
+    float soilMix = noise(vWorld.xz * 0.005) * 0.5 + noise(vWorld.xz * 0.02) * 0.5;
+    vec3 baseFujiSoil = mix(kurobokudoSoil, akatsuchiScoria, smoothstep(0.25, 0.75, soilMix));
+
+    // Flora
+    vec3 cedarAlbedo = rockAlbedo * vec3(0.25, 0.45, 0.25);
+    vec3 oakAlbedo   = rockAlbedo * vec3(0.35, 0.55, 0.30);
+    float speciesMix1 = noise(vWorld.xz * 0.015);
+    vec3 lowWoodlandAlbedo = mix(cedarAlbedo, oakAlbedo, speciesMix1);
+
+    vec3 veitchFirAlbedo = rockAlbedo * vec3(0.15, 0.35, 0.32);
+    vec3 ermanBirchAlbedo = rockAlbedo * vec3(0.45, 0.60, 0.28);
+    float speciesMix2 = noise(vWorld.xz * 0.025);
+    vec3 subalpineConiferAlbedo = mix(veitchFirAlbedo, ermanBirchAlbedo, speciesMix2);
+
+    float altFactor1 = smoothstep(300.0, 1500.0, vElev);
+    float altFactor2 = smoothstep(1500.0, 2200.0, vElev);
+    vec3 fujiFloraAlbedo = mix(lowWoodlandAlbedo, subalpineConiferAlbedo, altFactor1);
+
+    float fbm = noise(vWorld.xz * 0.001) * 0.5 + noise(vWorld.xz * 0.005) * 0.5;
+    float elevGrad = smoothstep(2300.0, 300.0, vElev);
+    float slopeGrad = smoothstep(0.40, 0.90, N.y);
+    float vegDensity = elevGrad * slopeGrad * (0.4 + 0.6 * fbm);
+
+    vec3 terrainAlbedo = mix(baseFujiSoil, fujiFloraAlbedo, clamp(vegDensity, 0.0, 0.85));
+
+    // 4. Lighting
+    float orenNayarDiffuse = NoL; // simplify for now to restore look
+    vec3 col = terrainAlbedo * (0.35 + 0.65 * orenNayarDiffuse);
+
+    // 5. Snow
+    float ragged = noise(vWorld.xz * 0.001) * 150.0;
+    float snowLine = 2200.0 + ragged;
+    float snow = smoothstep(snowLine - 250.0, snowLine + 250.0, vElev);
+    snow *= smoothstep(0.30, 0.70, N.y);
+    vec3 snowC = vec3(0.92, 0.94, 0.96);
+    col = mix(col, snowC * (0.75 + 0.25 * NoL), snow);
+
+    // 6. Distance Fog
+    float haze = 1.0 - exp(-dist * 0.000018);
     col = mix(col, uHorizonCol, haze);
-    // lowlands melt into the hazy skyline so the DEM boundary never shows
-    vec3 lowHaze = mix(uHorizonCol, vec3(0.30, 0.40, 0.45), 0.35);
-    col = mix(col, lowHaze, smoothstep(45.0, 5.0, vElev));
 
     fragColor = vec4(col, 1.0);
 }

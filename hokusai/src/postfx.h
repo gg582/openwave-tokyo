@@ -28,12 +28,12 @@ public:
     //                 0 = traditional control (global-memory taps),
     //                -1 = none. Returns the device RGBA frame pointer
     // (valid until endFrame()).
-    uchar4* beginFrame(int correctionMode, float amount, cudaStream_t stream);
+    uchar4* beginFrame(int correctionMode, float amount, int w, int h, cudaStream_t stream);
     // Copy the pristine rendered frame into the internal source buffer;
     // call once per frame BEFORE any pipeline's beginFrame, so every
     // pipeline corrects the same pristine input (not another pipeline's
     // output).
-    void snapshotFrame(cudaStream_t stream);
+    void snapshotFrame(int w, int h, cudaStream_t stream);
     void endFrame(cudaStream_t stream);
     void release();
 

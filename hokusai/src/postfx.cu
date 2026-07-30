@@ -256,7 +256,7 @@ bool PostFx::init(int w, int h, unsigned pbo)
     return true;
 }
 
-uchar4* PostFx::beginFrame(int correctionMode, float amount,
+uchar4* PostFx::beginFrame(int correctionMode, float amount, int w, int h,
                            cudaStream_t stream)
 {
     // correctionMode: 1 = complementary (warp-shuffle taps),
@@ -277,18 +277,18 @@ uchar4* PostFx::beginFrame(int correctionMode, float amount,
         const float chromaK = amount * 0.0022f * 4.0f;
         {
             const int tpb = 256;
-            const dim3 bpg((w_ + tpb - 1) / tpb, h_);
+            const dim3 bpg((w + tpb - 1) / tpb, h);
             if (correctionMode == 1)
                 correct_h_kernel<<<bpg, tpb, 0, stream>>>(d_orig_, d_tmp_,
-                                                          w_, h_, chromaK);
+                                                          w, h, chromaK);
             else
                 correct_h_trad_kernel<<<bpg, tpb, 0, stream>>>(d_orig_, d_tmp_,
-                                                               w_, h_, chromaK);
+                                                               w, h, chromaK);
         }
         {
-            const dim3 tpb(16, 16), bpg((w_ + 15) / 16, (h_ + 15) / 16);
+            const dim3 tpb(16, 16), bpg((w + 15) / 16, (h + 15) / 16);
             correct_v_kernel<<<bpg, tpb, 0, stream>>>(d_tmp_, d_orig_, frame,
-                                                      w_, h_, 1.2f, 0.9f);
+                                                      w, h, 1.2f, 0.9f);
         }
         CK(cudaEventRecord(t1, stream));
         CK(cudaEventSynchronize(t1));
@@ -301,14 +301,14 @@ uchar4* PostFx::beginFrame(int correctionMode, float amount,
     return frame;
 }
 
-void PostFx::snapshotFrame(cudaStream_t stream)
+void PostFx::snapshotFrame(int w, int h, cudaStream_t stream)
 {
     CK(cudaGraphicsMapResources(1, &resPbo_, stream));
     size_t sz = 0;
     uchar4* frame = nullptr;
     CK(cudaGraphicsResourceGetMappedPointer((void**)&frame, &sz, resPbo_));
     // pristine copy of this frame's render for all pipelines to read from
-    CK(cudaMemcpyAsync(d_orig_, frame, (size_t)w_ * h_ * sizeof(uchar4),
+    CK(cudaMemcpyAsync(d_orig_, frame, (size_t)w * h * sizeof(uchar4),
                        cudaMemcpyDeviceToDevice, stream));
     CK(cudaGraphicsUnmapResources(1, &resPbo_, stream));
 }

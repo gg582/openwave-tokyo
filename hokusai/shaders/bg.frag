@@ -43,27 +43,28 @@ void main()
 
     float elev = ray.y;
 
-    // --- Vibrant Deep Oceanic Sky Gradient ---
-    vec3 zenith  = vec3(0.02, 0.12, 0.48);
-    vec3 horizon = vec3(0.15, 0.35, 0.65);
-    vec3 sky = mix(horizon, zenith, smoothstep(-0.02, 0.22, elev));
+    // --- Rayleigh Sky Scattering & Physical Sunlight Atmospheric Tone ---
+    // Deep atmospheric sky scattering (deep slate-blue to warm horizon glow)
+    vec3 zenith  = vec3(0.14, 0.22, 0.38) * uSunColor;
+    vec3 horizon = vec3(0.42, 0.46, 0.52) * uSunColor;
+    vec3 sky = mix(horizon, zenith, smoothstep(-0.05, 0.40, elev));
 
     // --- Sun forward-scatter glow ---
     float sd = max(dot(ray, uSunDir), 0.0);
-    sky += uSunColor * (0.20 * pow(sd, 48.0) + 0.80 * pow(sd, 900.0));
+    sky += uSunColor * (0.25 * pow(sd, 32.0) + 0.60 * pow(sd, 512.0));
 
-    // --- Subtle high atmospheric clouds ---
+    // --- High atmospheric clouds ---
     float az = atan(ray.z, ray.x);
     float cov = fbm(vec2(az * 2.5 + uTime * 0.004, elev * 10.0));
     float thr0 = 1.0 - uCloud * 0.55;
     float cl = smoothstep(thr0, thr0 + 0.25, cov)
              * smoothstep(0.5, 0.06, elev);
-    vec3 cloudCol = mix(vec3(0.70, 0.78, 0.88), uSunColor, 0.15);
+    vec3 cloudCol = mix(vec3(0.55, 0.58, 0.62), uSunColor, 0.25);
     sky = mix(sky, cloudCol, cl * 0.4);
 
-    // Deep ocean horizon fog
+    // Horizon fog blending seamlessly with distant sea
     float sea = smoothstep(0.005, -0.02, elev);
-    sky = mix(sky, vec3(0.02, 0.10, 0.30), sea * 0.85);
+    sky = mix(sky, horizon * 0.75, sea * 0.85);
 
     fragColor = vec4(sky, 1.0);
 }

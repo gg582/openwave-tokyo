@@ -1,0 +1,24 @@
+# Large media files
+*.mp4
+
+# Log files
+*.log
+
+# Binaries and executables
+hokusai/hokusai_wave
+complementary_fft
+
+# Large datasets
+data/
+hokusai/data/
+
+# Assets (if large/binary)
+hokusai/assets/
+
+# Project internal tools
+.nri-backup/
+.nri-workspace/
+
+# Temporary or other files
+last.md
+*.pdf

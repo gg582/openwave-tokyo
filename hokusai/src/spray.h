@@ -46,6 +46,7 @@ public:
     void release();
 
     float4* positions() { return d_render; }
+    float*  sizes()     { return d_renderSize; }
     int     particleCount() const { return maxP_; }
     int     maxParticles() const { return maxP_; }
 
@@ -64,6 +65,7 @@ private:
     int*    d_gridA    = nullptr;
     int*    d_gridB    = nullptr;
     float4* d_render   = nullptr;
+    float*  d_renderSize = nullptr;  // per-droplet diameter (m) for the VBO
     const float* d_heightField = nullptr;
     int     maxP_ = 0;
 };

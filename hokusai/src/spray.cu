@@ -120,28 +120,45 @@ __global__ void spray_update_kernel(float4* __restrict__ parts,
             const float r2 = shash(s1 * 3u + 7u);
             const float r3 = shash(s1 * 5u + 13u);
             const float r4 = shash(s1 * 7u + 29u);
+            const float r5 = shash(s1 * 11u + 37u);
 
-            // ballistic ejection: forward at ~phase speed, up like the lip
-            const float v0 = phaseSpeed * (0.8f + 0.5f * r1);
-            vel[i] = make_float4(pdir.x * v0 + (r2 - 0.5f) * 2.0f,
-                                 0.4f + 1.6f * r3 * phaseSpeed * 0.35f,
-                                 pdir.z * v0 + (r4 - 0.5f) * 2.0f, 0.0f);
-            parts[i] = make_float4(wx + (r2 - 0.5f) * 4.0f, tide + 1.0f,
-                                   wz + (r4 - 0.5f) * 4.0f, 0.0f);
-            age[i] = 0.0f;
-            state[i] = 1;
+            if (r1 < 0.55f) {
+                // Most respawns become INDIVIDUAL FOAM BUBBLES directly on
+                // the surface: each one is a discrete air-entrainment bubble
+                // rafted at the breaking crest, with its own diameter
+                // (3 cm .. 14 cm, heavily skewed small like real sea foam).
+                const float surf = heightField[cell] + tide;
+                const float diam = 0.03f + 0.11f * r5 * r5;
+                parts[i] = make_float4(wx + (r2 - 0.5f) * 6.0f, surf + 0.02f,
+                                       wz + (r4 - 0.5f) * 6.0f, 0.0f);
+                vel[i] = make_float4(0.0f, 0.0f, 0.0f, diam);
+                age[i] = 0.0f;
+                state[i] = 2;
+            } else {
+                // ballistic ejection: forward at ~phase speed, up like the lip
+                const float v0 = phaseSpeed * (0.8f + 0.5f * r1);
+                vel[i] = make_float4(pdir.x * v0 + (r2 - 0.5f) * 2.0f,
+                                     0.4f + 1.6f * r3 * phaseSpeed * 0.35f,
+                                     pdir.z * v0 + (r4 - 0.5f) * 2.0f,
+                                     0.02f + 0.05f * r5);   // droplet diameter
+                parts[i] = make_float4(wx + (r2 - 0.5f) * 4.0f, tide + 1.0f,
+                                       wz + (r4 - 0.5f) * 4.0f, 0.0f);
+                age[i] = 0.0f;
+                state[i] = 1;
+            }
         }
         return;
     }
 
     if (state[i] == 1) {
-        // ballistic flight
+        // ballistic flight (vel.w carries the droplet diameter — preserve it)
+        const float diam = vel[i].w;
         float3 v = make_float3(vel[i].x, vel[i].y, vel[i].z);
         v.y -= 9.81f * dt;
         float3 p = make_float3(parts[i].x + v.x * dt,
                                parts[i].y + v.y * dt,
                                parts[i].z + v.z * dt);
-        vel[i] = make_float4(v.x, v.y, v.z, 0.0f);
+        vel[i] = make_float4(v.x, v.y, v.z, diam);
         parts[i] = make_float4(p.x, p.y, p.z, 0.0f);
         age[i] += dt;
 
@@ -151,6 +168,10 @@ __global__ void spray_update_kernel(float4* __restrict__ parts,
         const float surf = heightField[gy * n + gx] + tide;
         if (p.y <= surf || age[i] > 2.5f) {
             parts[i].y = surf + 0.03f;
+            // a landed spray droplet merges into the foam: it becomes an
+            // individual floating bubble of its own size
+            vel[i].w = fmaxf(diam * (1.5f + shash((unsigned)i * 747796405u +
+                                                  (unsigned)frame)), 0.05f);
             state[i] = 3;                 // landed: deposit once, then float
         }
         return;
@@ -168,7 +189,7 @@ __global__ void spray_update_kernel(float4* __restrict__ parts,
         parts[i] = make_float4(p.x + pdir.x * drift, surf + 0.03f,
                                p.z + pdir.z * drift, 0.0f);
         const unsigned s1 = (unsigned)i * 2654435761u;
-        const float lifetime = 2.0f + 3.0f * shash(s1);
+        const float lifetime = 1.2f + 2.0f * shash(s1);
         age[i] += dt;
         if (age[i] > lifetime) { state[i] = 0; age[i] = 0.0f; }
     }
@@ -232,11 +253,13 @@ void sprayProjectAggregated(float4* parts, float4* vel, int* state, int maxP,
 }
 
 // finalize: convert landed markers back to alive-eligible and build the
-// render buffer (float4 x,y,z,alpha)
+// render buffers (float4 x,y,z,alpha + per-droplet diameter in meters)
 __global__ void spray_finalize_kernel(float4* __restrict__ parts,
+                                      const float4* __restrict__ vel,
                                       float* __restrict__ age,
                                       int* __restrict__ state, int maxP,
-                                      float4* __restrict__ render)
+                                      float4* __restrict__ render,
+                                      float* __restrict__ renderSize)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= maxP) return;
@@ -244,7 +267,7 @@ __global__ void spray_finalize_kernel(float4* __restrict__ parts,
     if (state[i] == 1) alpha = fminf(age[i] * 5.0f, 1.0f);      // flying
     else if (state[i] == 2) {                                    // floating
         const unsigned s1 = (unsigned)i * 2654435761u;
-        const float lifetime = 2.0f + 3.0f * shash(s1);
+        const float lifetime = 1.2f + 2.0f * shash(s1);
         alpha = 0.85f * fminf(fmaxf(1.0f - age[i] / lifetime, 0.0f) + 0.15f,
                               1.0f);
     } else if (state[i] == 3) {                                  // just landed
@@ -252,6 +275,7 @@ __global__ void spray_finalize_kernel(float4* __restrict__ parts,
         state[i] = 2;
     }
     render[i] = make_float4(parts[i].x, parts[i].y, parts[i].z, alpha);
+    renderSize[i] = (alpha > 0.0f) ? vel[i].w : 0.0f;
 }
 
 // deposit Q16.16 grid into the ocean foam buffer
@@ -262,7 +286,7 @@ __global__ void deposit_kernel(float* __restrict__ foam, const int* n_grid,
     const int j = blockIdx.y * blockDim.y + threadIdx.y;
     if (i >= n || j >= n) return;
     const int e = j * n + i;
-    foam[e] = fminf(foam[e] + (float)n_grid[e] * (1.0f / 65536.0f) * 0.15f,
+    foam[e] = fminf(foam[e] + (float)n_grid[e] * (1.0f / 65536.0f) * 0.05f,
                     1.5f);
 }
 
@@ -282,11 +306,13 @@ void Spray::init(const SprayConfig& cfg)
     CK(cudaMalloc(&d_gridA, (size_t)cfg_.n * cfg_.n * sizeof(int)));
     CK(cudaMalloc(&d_gridB, (size_t)cfg_.n * cfg_.n * sizeof(int)));
     CK(cudaMalloc(&d_render, maxP_ * sizeof(float4)));
+    CK(cudaMalloc(&d_renderSize, maxP_ * sizeof(float)));
     CK(cudaMemset(d_emitCount, 0, sizeof(int)));
     CK(cudaMemset(d_state, 0, maxP_ * sizeof(int)));
     CK(cudaMemset(d_gridA, 0, (size_t)cfg_.n * cfg_.n * sizeof(int)));
     CK(cudaMemset(d_gridB, 0, (size_t)cfg_.n * cfg_.n * sizeof(int)));
     CK(cudaMemset(d_render, 0, maxP_ * sizeof(float4)));
+    CK(cudaMemset(d_renderSize, 0, maxP_ * sizeof(float)));
 }
 
 void Spray::scan(const float* dFoam, int variant, cudaStream_t stream)
@@ -384,8 +410,9 @@ void Spray::clearGrid(cudaStream_t stream)
 void Spray::finalize(cudaStream_t stream)
 {
     const int tpb = 256, bpg = (maxP_ + tpb - 1) / tpb;
-    spray_finalize_kernel<<<bpg, tpb, 0, stream>>>(d_parts, d_age, d_state,
-                                                   maxP_, d_render);
+    spray_finalize_kernel<<<bpg, tpb, 0, stream>>>(d_parts, d_vel, d_age,
+                                                   d_state, maxP_, d_render,
+                                                   d_renderSize);
 }
 
 void Spray::release()
@@ -393,8 +420,10 @@ void Spray::release()
     cudaFree(d_emitList); cudaFree(d_emitCount); cudaFree(d_parts);
     cudaFree(d_vel); cudaFree(d_age); cudaFree(d_state);
     cudaFree(d_gridA); cudaFree(d_gridB); cudaFree(d_render);
+    cudaFree(d_renderSize);
     d_emitList = d_emitCount = d_state = nullptr;
     d_gridA = d_gridB = nullptr;
     d_parts = d_vel = d_render = nullptr;
+    d_renderSize = nullptr;
     d_age = nullptr;
 }

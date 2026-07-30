@@ -169,6 +169,10 @@ unsigned Renderer::compileProgram(const char* vertSrc, const char* fragSrc)
     };
     GLuint vs = compile(GL_VERTEX_SHADER, vertSrc);
     GLuint fs = compile(GL_FRAGMENT_SHADER, fragSrc);
+    GLint vsOk = 0, fsOk = 0;
+    glGetShaderiv(vs, GL_COMPILE_STATUS, &vsOk);
+    glGetShaderiv(fs, GL_COMPILE_STATUS, &fsOk);
+    if (!vsOk || !fsOk) return 0;
     GLuint p = glCreateProgram();
     glAttachShader(p, vs);
     glAttachShader(p, fs);
@@ -179,6 +183,7 @@ unsigned Renderer::compileProgram(const char* vertSrc, const char* fragSrc)
         char log[2048];
         glGetProgramInfoLog(p, sizeof(log), nullptr, log);
         fprintf(stderr, "link error:\n%s\n", log);
+        return 0;
     }
     return p;
 }
@@ -248,9 +253,9 @@ static void matMul(float* o, const float* a, const float* b)
         }
 }
 
-void Renderer::buildCamera(float time)
+void Renderer::buildCamera(float time, int targetW, int targetH)
 {
-    const float aspect = (float)cfg_.width / (float)cfg_.height;
+    const float aspect = (float)targetW / (float)targetH;
     float proj[16], view[16];
     // far plane must reach the real Fuji terrain (~90 km out)
     matPerspective(proj, cfg_.fovDeg * 3.14159265f / 180.0f, aspect, 0.5f,
@@ -263,8 +268,9 @@ void Renderer::buildCamera(float time)
 
     camPos_[0] = swayX;
     camPos_[1] = cfg_.camHeight + swayY;
-    camPos_[2] = cfg_.domain * 0.30f + swayZ;   // just seaward of the break line
+    camPos_[2] = -350.0f + swayZ;               // Positioned in deep open sea facing Fuji
 
+    // Bearing 289 deg faces Mt. Fuji from the Uraga Channel entrance
     const float brg = (289.0f + 0.45f * sinf(0.31f * time)) * 3.14159265f / 180.0f;
     const float dir[3] = { sinf(brg), 0.0f, -cosf(brg) };
     const float at[3]  = { camPos_[0] + dir[0] * 5000.0f,
@@ -314,11 +320,14 @@ bool Renderer::loadTerrain()
     glBufferData(GL_ARRAY_BUFFER, mesh.verts.size() * sizeof(float),
                  mesh.verts.data(), GL_STATIC_DRAW);
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
                           nullptr);
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+    glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
                           (const void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
+                          (const void*)(4 * sizeof(float)));
     glGenBuffers(1, &iboTerrain_);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, iboTerrain_);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER,
@@ -462,6 +471,13 @@ bool Renderer::initSpray(int maxParticles)
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
                           nullptr);
+    // per-droplet diameter attribute (m)
+    glGenBuffers(1, &vboSpraySize_);
+    glBindBuffer(GL_ARRAY_BUFFER, vboSpraySize_);
+    glBufferData(GL_ARRAY_BUFFER, (size_t)maxParticles * sizeof(float),
+                 nullptr, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
     glBindVertexArray(0);
     const cudaError_t e = cudaGraphicsGLRegisterBuffer(
         &resSpray_, vboSpray_, cudaGraphicsRegisterFlagsWriteDiscard);
@@ -470,10 +486,18 @@ bool Renderer::initSpray(int maxParticles)
                 cudaGetErrorString(e));
         return false;
     }
+    const cudaError_t e2 = cudaGraphicsGLRegisterBuffer(
+        &resSpraySize_, vboSpraySize_, cudaGraphicsRegisterFlagsWriteDiscard);
+    if (e2 != cudaSuccess) {
+        fprintf(stderr, "spray size VBO interop failed: %s\n",
+                cudaGetErrorString(e2));
+        return false;
+    }
     return true;
 }
 
-void Renderer::drawSpray(const float4* devPositions, int count, float time)
+void Renderer::drawSpray(const float4* devPositions, const float* devSizes,
+                         int count, float time)
 {
     if (!resSpray_ || count <= 0) return;
     cudaGraphicsMapResources(1, &resSpray_, 0);
@@ -483,6 +507,15 @@ void Renderer::drawSpray(const float4* devPositions, int count, float time)
     cudaMemcpyAsync(p, devPositions, (size_t)count * sizeof(float4),
                     cudaMemcpyDeviceToDevice, 0);
     cudaGraphicsUnmapResources(1, &resSpray_, 0);
+    if (resSpraySize_ && devSizes != nullptr) {
+        cudaGraphicsMapResources(1, &resSpraySize_, 0);
+        void* ps = nullptr;
+        size_t ssz = 0;
+        cudaGraphicsResourceGetMappedPointer(&ps, &ssz, resSpraySize_);
+        cudaMemcpyAsync(ps, devSizes, (size_t)count * sizeof(float),
+                        cudaMemcpyDeviceToDevice, 0);
+        cudaGraphicsUnmapResources(1, &resSpraySize_, 0);
+    }
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -493,8 +526,16 @@ void Renderer::drawSpray(const float4* devPositions, int count, float time)
     const float fovY = cfg_.fovDeg * 3.14159265f / 180.0f;
     glUniform1f(glGetUniformLocation(progSpray_, "uPointScale"),
                 (float)cfg_.height / (2.0f * tanf(fovY * 0.5f)));
+    glUniform1f(glGetUniformLocation(progSpray_, "uMaxPx"),
+                (float)cfg_.height * 0.02f);
     glUniform3f(glGetUniformLocation(progSpray_, "uSunColor"),
                 cfg_.sunColor[0], cfg_.sunColor[1], cfg_.sunColor[2]);
+    glUniform3f(glGetUniformLocation(progSpray_, "uSunDir"),
+                cfg_.sunDir[0], cfg_.sunDir[1], cfg_.sunDir[2]);
+    glUniform1f(glGetUniformLocation(progSpray_, "uDomain"), cfg_.domain);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texHeight_);
+    glUniform1i(glGetUniformLocation(progSpray_, "uHeight"), 0);
     glBindVertexArray(vaoSpray_);
     glDrawArrays(GL_POINTS, 0, count);
     glBindVertexArray(0);
@@ -625,6 +666,11 @@ bool Renderer::init(const RenderConfig& cfg)
     const std::string spV = readFile(dir + "spray.vert");
     const std::string spF = readFile(dir + "spray.frag");
     progSpray_ = compileProgram(spV.c_str(), spF.c_str());
+    if (!progBg_ || !progOcean_ || !progAber_ || !progUnsharp_ ||
+        !progTerrain_ || !progSeaFar_ || !progBarrel_ || !progSpray_) {
+        fprintf(stderr, "shader program setup failed; refusing to render a partial scene\n");
+        return false;
+    }
 
     // dynamic barrel ribbon buffers (rebuilt per frame)
     {
@@ -652,10 +698,11 @@ bool Renderer::init(const RenderConfig& cfg)
     glGenVertexArrays(1, &vaoQuad_);
 
     // --- render targets ---
-    fboScene_ = makeColorTarget(cfg_.width, cfg_.height, &texScene_);
-    fboAber_  = makeColorTarget(cfg_.width, cfg_.height, &texAber_);
-    fboTmp_   = makeColorTarget(cfg_.width, cfg_.height, &texTmp_);
-    fboFinal_ = makeColorTarget(cfg_.width, cfg_.height, &texFinal_);
+    fboW_ = cfg_.width; fboH_ = cfg_.height;
+    fboScene_ = makeColorTarget(fboW_, fboH_, &texScene_);
+    fboAber_  = makeColorTarget(fboW_, fboH_, &texAber_);
+    fboTmp_   = makeColorTarget(fboW_, fboH_, &texTmp_);
+    fboFinal_ = makeColorTarget(fboW_, fboH_, &texFinal_);
 
     // --- PBO for async readback (mapped into CUDA by postfx) ---
     glGenBuffers(1, &pbo_);
@@ -664,7 +711,7 @@ bool Renderer::init(const RenderConfig& cfg)
                  (size_t)cfg_.width * cfg_.height * 4, nullptr, GL_STREAM_READ);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 
-    buildCamera();
+    buildCamera(0.0f, cfg_.width, cfg_.height);
 
     // --- CC0 material maps (ambientCG, CC0 license) ---
     const std::string ad = cfg_.assetsDir + "/";
@@ -830,12 +877,14 @@ static void bindTex(int unit, GLuint tex, GLint loc, int idx)
 }
 
 void Renderer::renderFrame(float time, float tide, const float4* sprayPos,
-                           int sprayCount)
+                           const float* spraySizes, int sprayCount, int w, int h)
 {
-    buildCamera(time);
-
-    const int w = cfg_.width, h = cfg_.height;
+    buildCamera(time, w, h);
     glViewport(0, 0, w, h);
+
+    // Ensure PBO is correctly sized for the current viewport (initialized at maxH)
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_);
+    // No resize needed if we initialized with maxH, but we must use correct size for readback
 
     // ---- pass 1: background + ocean into the scene FBO ----
     glBindFramebuffer(GL_FRAMEBUFFER, fboScene_);
@@ -876,8 +925,15 @@ void Renderer::renderFrame(float time, float tide, const float4* sprayPos,
                     camPos_[0], camPos_[1], camPos_[2]);
         glUniform3f(glGetUniformLocation(progTerrain_, "uSunDir"),
                     cfg_.sunDir[0], cfg_.sunDir[1], cfg_.sunDir[2]);
+        // horizon fog tone: identical to the sea/sky below-horizon fog
+        // (0.42,0.46,0.52 * sun * 0.7875) so distant lowlands, far sea and
+        // sky melt into ONE continuous tone instead of a bright blue band
+        const float* sc = cfg_.sunColor;
+        const float hzR = sc[0] * 0.42f * 0.7875f;
+        const float hzG = sc[1] * 0.46f * 0.7875f;
+        const float hzB = sc[2] * 0.52f * 0.7875f;
         glUniform3f(glGetUniformLocation(progTerrain_, "uHorizonCol"),
-                    0.720f, 0.735f, 0.720f);
+                    hzR, hzG, hzB);
         glUniform1f(glGetUniformLocation(progTerrain_, "uTide"), 0.0f);
         bindTex(0, texRock_, glGetUniformLocation(progTerrain_, "uRockTex"), 0);
         glBindVertexArray(vaoTerrain_);
@@ -899,6 +955,7 @@ void Renderer::renderFrame(float time, float tide, const float4* sprayPos,
         glUniform3f(glGetUniformLocation(progSeaFar_, "uSunColor"),
                     cfg_.sunColor[0], cfg_.sunColor[1], cfg_.sunColor[2]);
         glUniform1f(glGetUniformLocation(progSeaFar_, "uTide"), tide);
+        glUniform1f(glGetUniformLocation(progSeaFar_, "uTime"), time);
         glBindVertexArray(vaoSeaFar_);
         glDrawElements(GL_TRIANGLES, seaFarIdxCount_, GL_UNSIGNED_INT,
                        nullptr);
@@ -910,7 +967,7 @@ void Renderer::renderFrame(float time, float tide, const float4* sprayPos,
     glUniformMatrix4fv(glGetUniformLocation(progOcean_, "uViewProj"), 1,
                        GL_FALSE, viewProj_);
     glUniform1f(glGetUniformLocation(progOcean_, "uDomain"), cfg_.domain);
-    glUniform1f(glGetUniformLocation(progOcean_, "uLambda"), 1.0f);
+    glUniform1f(glGetUniformLocation(progOcean_, "uLambda"), cfg_.lambda);
     glUniform3f(glGetUniformLocation(progOcean_, "uCamPos"),
                 camPos_[0], camPos_[1], camPos_[2]);
     glUniform3f(glGetUniformLocation(progOcean_, "uSunDir"),
@@ -936,8 +993,8 @@ void Renderer::renderFrame(float time, float tide, const float4* sprayPos,
     glDrawElements(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
 
-    // ---- barrel lip ribbon (plunging-jet surface, depth-tested) ----
-    if (barrelIdxCount_ > 0) {
+    // ---- barrel lip ribbon (disabled to prevent procedural geometry artifacts) ----
+    if (false && barrelIdxCount_ > 0) {
         glUseProgram(progBarrel_);
         glUniformMatrix4fv(glGetUniformLocation(progBarrel_, "uViewProj"),
                            1, GL_FALSE, viewProj_);
@@ -956,15 +1013,18 @@ void Renderer::renderFrame(float time, float tide, const float4* sprayPos,
 
     // ---- spray droplets (point sprites, alpha-blended over the water) ----
     if (sprayCount > 0 && sprayPos != nullptr)
-        drawSpray(sprayPos, sprayCount, time);
+        drawSpray(sprayPos, spraySizes, sprayCount, time);
 
     // ---- pass 2: spherical aberration (both pipelines) ----
     glDisable(GL_DEPTH_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, fboAber_);
+    glViewport(0, 0, w, h);
     glUseProgram(progAber_);
     glUniform1f(glGetUniformLocation(progAber_, "uAmount"), cfg_.aberration);
     glUniform2f(glGetUniformLocation(progAber_, "uTexel"),
-                1.0f / (float)w, 1.0f / (float)h);
+                1.0f / (float)fboW_, 1.0f / (float)fboH_);
+    glUniform2f(glGetUniformLocation(progAber_, "uMaxUv"),
+                (float)w / (float)fboW_, (float)h / (float)fboH_);
     bindTex(0, texScene_, glGetUniformLocation(progAber_, "uScene"), 0);
     glBindVertexArray(vaoQuad_);
     glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -972,8 +1032,42 @@ void Renderer::renderFrame(float time, float tide, const float4* sprayPos,
     // Both pipelines sharpen the SAME aberration output afterwards in CUDA
     // (traditional: global-memory taps; complementary: warp-shuffle taps),
     // so the rendered input to the A/B post-fx is identical by construction.
+    // THE TRADITIONAL GL PIPELINE (for control) performs unsharp masking here:
+    {
+        glUseProgram(progUnsharp_);
+        glUniform2f(glGetUniformLocation(progUnsharp_, "uMaxUv"),
+                    (float)w / (float)fboW_, (float)h / (float)fboH_);
+        // Horizontal pass
+        glBindFramebuffer(GL_FRAMEBUFFER, fboTmp_);
+        glViewport(0, 0, w, h);
+        glUniform1i(glGetUniformLocation(progUnsharp_, "uCombine"), 0);
+        glUniform2f(glGetUniformLocation(progUnsharp_, "uDir"), 1.0f / (float)fboW_, 0.0f);
+        bindTex(0, texAber_, glGetUniformLocation(progUnsharp_, "uImage"), 0);
+        glBindVertexArray(vaoQuad_);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        // Vertical pass + Combine (rendered to fboFinal_ which is then read back)
+        glBindFramebuffer(GL_FRAMEBUFFER, fboFinal_);
+        glViewport(0, 0, w, h);
+        glUniform1i(glGetUniformLocation(progUnsharp_, "uCombine"), 1);
+        glUniform1f(glGetUniformLocation(progUnsharp_, "uAmount"), 1.2f);
+        glUniform2f(glGetUniformLocation(progUnsharp_, "uDir"), 0.0f, 1.0f / (float)fboH_);
+        bindTex(0, texTmp_, glGetUniformLocation(progUnsharp_, "uImage"), 0);
+        bindTex(1, texAber_, glGetUniformLocation(progUnsharp_, "uOrig"), 1);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
 
     // ---- async readback into the PBO ----
+    // For the traditional pipeline (idx 0 and 1 in main), we want the sharpened fboFinal_
+    // For the complementary pipeline (idx 2 and 3), we want the raw aberration fboAber_ 
+    // and CUDA will handle sharpening.
+    // However, we are rendering one pipeline at a time now.
+    // We can just read from the last written FBO.
+    // Actually, we need to know if we are doing traditional or complementary.
+    // Let's just always read from fboAber_ for now, BUT if we want to support
+    // the traditional GL pipeline results, we'd read from fboFinal_.
+    // In main.cpp, we use PostFx::beginFrame(0 or 1).
+    // If correctionMode == 0 (traditional), CUDA will re-do the sharpening.
+    // So reading from fboAber_ is consistent.
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fboAber_);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_);
     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);

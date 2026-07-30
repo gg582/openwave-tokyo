@@ -23,9 +23,9 @@ bool Encoder::openCodec(const char* name, bool hw)
     cc->height     = h_;
     cc->time_base  = AVRational{ 1, fps_ };
     cc->framerate  = AVRational{ fps_, 1 };
-    cc->gop_size   = fps_ * 2;
+    cc->gop_size   = fps_;              // GOP 1 sec for fast seeking & stream compatibility
     cc->max_b_frames = 0;
-    cc->bit_rate   = 8000000;
+    cc->bit_rate   = 12000000;          // 12 Mbps for 540p 60s stream
 
     AVDictionary* opt = nullptr;
     if (hw) {
@@ -97,6 +97,8 @@ bool Encoder::open(const char* path, int w, int h, int fps)
     AVCodecContext* cc = (AVCodecContext*)cc_;
     AVStream* st = avformat_new_stream(oc, nullptr);
     st->time_base = cc->time_base;
+    st->avg_frame_rate = cc->framerate;
+    st->r_frame_rate = cc->framerate;
     avcodec_parameters_from_context(st->codecpar, cc);
     st_ = st;
 

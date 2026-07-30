@@ -23,6 +23,7 @@ struct RenderConfig {
     float       fovDeg     = 22.0f;    // long-focus lens (telephoto)
     float       camHeight  = 12.0f;    // low optical height (m)
     float       aberration = 0.7f;     // spherical aberration strength
+    float       lambda     = 1.0f;     // horizontal choppiness (passed to uLambda)
     // era weather (NASA POWER + 1831 solar position), filled by main
     float       sunDir[3]   = {0.9f, 0.2f, 0.38f};
     float       sunColor[3] = {1.0f, 0.90f, 0.72f};
@@ -45,11 +46,12 @@ public:
     // Renders the scene once: sky + terrain + far sea + ocean mesh, then
     // the spherical-aberration post pass, read back into the PBO.
     void renderFrame(float time, float tide, const float4* sprayPos,
-                     int sprayCount);
-    // spray droplets: register the shared VBO once, draw each frame from a
-    // CUDA device buffer (positions+alpha, float4 per droplet)
+                     const float* spraySizes, int sprayCount, int w, int h);
+    // spray droplets: register the shared VBOs once, draw each frame from
+    // CUDA device buffers (positions+alpha float4, diameters float)
     bool initSpray(int maxParticles);
-    void drawSpray(const float4* devPositions, int count, float time);
+    void drawSpray(const float4* devPositions, const float* devSizes,
+                   int count, float time);
     void shutdown();
 
     unsigned pbo()    const { return pbo_; }
@@ -88,8 +90,9 @@ private:
     int      barrelIdxCount_ = 0;
     // spray droplet point sprites
     unsigned progSpray_ = 0;
-    unsigned vaoSpray_ = 0, vboSpray_ = 0;
+    unsigned vaoSpray_ = 0, vboSpray_ = 0, vboSpraySize_ = 0;
     cudaGraphicsResource* resSpray_ = nullptr;
+    cudaGraphicsResource* resSpraySize_ = nullptr;
     int      sprayMaxP_ = 0;
     // far sea plane (fills the bay between the wave patch and the shore)
     unsigned progSeaFar_ = 0;
@@ -97,6 +100,7 @@ private:
     int      seaFarIdxCount_ = 0;
     int      indexCount_ = 0;
     int      gridN_ = 0;
+    int      fboW_ = 0, fboH_ = 0;
 
     // CUDA-GL interop handles
     cudaGraphicsResource* resHeight_ = nullptr;
@@ -112,7 +116,7 @@ private:
 
     unsigned compileProgram(const char* vertSrc, const char* fragSrc);
     unsigned makeColorTarget(int w, int h, unsigned* tex);
-    void buildCamera(float time = 0.0f);
+    void buildCamera(float time, int targetW, int targetH);
     bool     loadTerrain();
     bool     initSeaFar();
 };

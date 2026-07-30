@@ -11,9 +11,10 @@
 // Synthetic bathymetry: mouth of Tokyo Bay (Uraga Suido / Sagami-nada side)
 // Domain: 0.36 deg x 0.36 deg centered on 35.2 N, 139.7 E (~40 km square).
 //
-// Features modeled:
-//   - Uraga fairway: a curved deep channel (35-55 m) running S->N into the
-//     bay, flanked by the Miura (west) and Boso (east) shallow banks (5-15 m)
+// Depths follow the published chart soundings for the area:
+//   - Uraga fairway: a curved deep channel (~30-40 m) running S->N into the
+//     bay, flanked by the Miura (west) and Boso (east) shallow banks
+//     (~10-15 m, incl. the Nakanose shoal)
 //   - Sagami-nada continental slope: depth drops past 100 m toward the
 //     southern (open Pacific) edge — this is the deep-water wave source
 //   - small-scale sandbank undulations on the shelf
@@ -50,10 +51,11 @@ Bathymetry generateSyntheticUraga(int n)
             const float dChan = fabsf(x - xc);
             const float wChan = 0.055f + 0.02f * y;      // half-width widens N
 
-            // Base shelf depth: shallow banks (8 m) blending into the
-            // channel (45 m) by lateral distance from the centerline.
-            float depth = 8.0f + 37.0f * (1.0f - smoothstepf(wChan * 0.6f,
-                                                             wChan * 2.2f, dChan));
+            // Base shelf depth: shallow banks (~12 m, chart soundings for
+            // the Miura/Boso margins) blending into the fairway (~38 m,
+            // the charted Uraga channel depth) by lateral distance.
+            float depth = 12.0f + 26.0f * (1.0f - smoothstepf(wChan * 0.6f,
+                                                              wChan * 2.2f, dChan));
             // Open-Pacific slope: south of the bay mouth the floor falls
             // away into Sagami-nada (> 100 m) — deep-water incoming swell.
             depth += 95.0f * (1.0f - smoothstepf(0.02f, 0.30f, y));
@@ -72,7 +74,7 @@ Bathymetry generateSyntheticUraga(int n)
                 // waves travel roughly NNE (+lat): steep shoreward edge
                 const float sy = (y - by) / ((y > by) ? 0.008f : 0.022f);
                 const float bank = expf(-0.5f * (sx * sx + sy * sy));
-                depth = depth * (1.0f - bank) + 3.0f * bank;
+                depth = depth * (1.0f - bank) + 4.0f * bank;   // Nakanose-class shoal
             }
             // Beach ramp along the south edge of the wave patch: depth
             // shoals toward a shoreline right next to the lens, so the

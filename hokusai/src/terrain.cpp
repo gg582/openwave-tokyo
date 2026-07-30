@@ -42,7 +42,7 @@ bool loadFujiDEM(const char* rgbPath, const char* metaPath,
 
     const int gw = W / decimate, gh = H / decimate;
     out.gridW = gw; out.gridH = gh;
-    out.verts.resize((size_t)gw * gh * 4);
+    out.verts.resize((size_t)gw * gh * 8);
 
     auto elevAt = [&](int x, int y) {
         const unsigned char* p = &rgb[((size_t)y * W + x) * 3];
@@ -50,21 +50,39 @@ bool loadFujiDEM(const char* rgbPath, const char* metaPath,
                - 32768.0f;
     };
 
+    auto posAt = [&](int i, int j) {
+        const int sx = i * decimate, sy = j * decimate;
+        const float lon = lonMin + (lonMax - lonMin) * (float)sx / (float)W;
+        const float lat = latMax - (latMax - latMin) * (float)sy / (float)H;
+        float e = elevAt(sx, sy);
+        if (e < 2.0f) e = -30.0f;
+        else          e *= heightExag;
+        return std::vector<float>{ (lon - lon0) * mPerDegLon, e, -(lat - lat0) * mPerDegLat };
+    };
+
     for (int j = 0; j < gh; ++j)
         for (int i = 0; i < gw; ++i) {
-            const int sx = i * decimate, sy = j * decimate;
-            const float lon = lonMin + (lonMax - lonMin) * (float)sx / (float)W;
-            const float lat = latMax - (latMax - latMin) * (float)sy / (float)H;
-            float e = elevAt(sx, sy);
-            // sink sub-sea-level cells so the far-sea plane always covers
-            // water; the shoreline stays where the DEM says it is
-            if (e < 2.0f) e = -3.0f;
-            else          e *= heightExag;
-            float* v = &out.verts[((size_t)j * gw + i) * 4];
-            v[0] = (lon - lon0) * mPerDegLon;        // east offset (m)
-            v[1] = e;
-            v[2] = -(lat - lat0) * mPerDegLat;       // +z = south (m)
-            v[3] = e;                                // shading elevation
+            std::vector<float> p = posAt(i, j);
+            float* v = &out.verts[((size_t)j * gw + i) * 8];
+            v[0] = p[0]; v[1] = p[1]; v[2] = p[2]; v[3] = p[1];
+
+            // Analytic 4-neighbor central difference normal for smooth, flicker-free shading
+            std::vector<float> pL = posAt(std::max(i - 1, 0), j);
+            std::vector<float> pR = posAt(std::min(i + 1, gw - 1), j);
+            std::vector<float> pT = posAt(i, std::max(j - 1, 0));
+            std::vector<float> pB = posAt(i, std::min(j + 1, gh - 1));
+
+            float dx[3] = { pR[0] - pL[0], pR[1] - pL[1], pR[2] - pL[2] };
+            float dz[3] = { pB[0] - pT[0], pB[1] - pT[1], pB[2] - pT[2] };
+
+            float nx = dx[1] * dz[2] - dx[2] * dz[1];
+            float ny = dx[2] * dz[0] - dx[0] * dz[2];
+            float nz = dx[0] * dz[1] - dx[1] * dz[0];
+            float len = sqrtf(nx * nx + ny * ny + nz * nz + 1e-8f);
+            nx /= len; ny /= len; nz /= len;
+            if (ny < 0.0f) { nx = -nx; ny = -ny; nz = -nz; }
+
+            v[4] = nx; v[5] = ny; v[6] = nz; v[7] = 0.0f;
         }
 
     for (int j = 0; j < gh - 1; ++j)
