@@ -476,6 +476,17 @@ void Ocean::advance(float t, float tide, float gust, cudaStream_t stream)
                                                      n, cfg_.lambda, dx, tide,
                                                      gust, t, pdir,
                                                      sBank, cg, tCross);
+
+        // Kinematic Wave Steepening Pass: Applies c(h)*dh/ds propagation
+        // to curl wave faces dynamically without static plate lifting
+        const float cell = dx;
+        const float dtEff = 0.033f;
+        if (mode_ == FFT_TRADITIONAL) {
+            steepen_trad_kernel<<<bpg, tpb, 0, stream>>>(d_spec, d_depth, d_h, n, cell, pdir, dtEff, tide);
+        } else {
+            const dim3 bpgSteepen(n / 32, n);
+            steepen_shuffle_kernel<<<bpgSteepen, 32, 0, stream>>>(d_spec, d_depth, d_h, n, cell, pdir, dtEff, tide);
+        }
     }
 }
 
