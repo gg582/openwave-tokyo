@@ -97,124 +97,107 @@ void main()
     float NoH = clamp(dot(N, H), 0.0, 1.0);
     float VoH = clamp(dot(V, H), 0.0, 1.0);
 
-    // --- Physically-driven ocean Optics (Pure Spectral Beer-Lambert & Scattering) ---
-    // Pure optical extinction coefficients (1/m for Pure Water: R=0.35, G=0.045, B=0.015)
-    // and Rayleigh sky irradiance derived directly from the atmospheric sun color
-    const vec3 WATER_SIGMA = vec3(0.35, 0.045, 0.015);
-    float depth = texture(uDepth, vUv).r;              // bathymetric depth
-    float hgt = texture(uHeight, vUv).r;
-    float graze = clamp(1.0 - NoV, 0.0, 1.0);          // 0 = looking straight down
-    float pathLen = max(depth + max(hgt, 0.0), 0.1) * (0.40 + 1.8 * graze * graze);
+    // --- PHYSICAL OPTICS PATCH 1: Depth-dependent Beer-Lambert Wavelength Attenuation ---
+    // Pure Jerlov Type II coastal water extinction coefficients (1/m: Red, Green, Blue)
+    const vec3 JerlovII_Sigma = vec3(0.280, 0.045, 0.018);
+    float bathyDepth = max(texture(uDepth, vUv).r, 0.5);
+    float surfaceHgt = texture(uHeight, vUv).r;
+    float totalWaterColumn = max(bathyDepth + max(surfaceHgt, 0.0), 0.2);
 
-    // Translucency & extinction derived directly from physical path length and solar spectral light
-    vec3 transm = exp(-WATER_SIGMA * pathLen);
-    vec3 skyRadiance = uSunColor * vec3(0.12, 0.28, 0.58) * (1.0 + 0.5 * graze);
-    vec3 body = skyRadiance * transm * (0.20 + 0.80 * NoL);
+    // Path length accounting for slanted viewing angle (grazing ray penetration)
+    float pathLen = totalWaterColumn / max(NoV, 0.12);
+    vec3 waterTransmittance = exp(-JerlovII_Sigma * pathLen);
 
-    // Seafloor diffuse reflection (derived dynamically from light extinction & material texture)
-    vec3 bottomTex = vec3(0.35, 0.30, 0.22);
+    // --- PHYSICAL OPTICS PATCH 2: Atmospheric Rayleigh Sky & Dynamic Ocean Illumination ---
+    vec3 skyRadiance = uSunColor * vec3(0.14, 0.29, 0.54) * (0.80 + 0.35 * graze);
+
+    // Deep water upwelling radiance (forward & backward ambient scattering in water column)
+    vec3 deepUpwelling = skyRadiance * vec3(0.08, 0.22, 0.35) * (0.30 + 0.70 * NoL);
+
+    // Shallow seabed reflectance attenuated by two-way water column path
+    vec3 seabedAlbedo = vec3(0.28, 0.24, 0.18);
     if (uHasFoamTex == 1) {
-        bottomTex = texture(uFoamAlbedo, vWorld.xz * 0.08).rgb;
+        seabedAlbedo = texture(uFoamAlbedo, vWorld.xz * 0.08).rgb * vec3(0.60, 0.55, 0.45);
     }
-    vec2 dg = vec2(dFdx(depth), dFdy(depth));
-    vec3 bottomIllum = uSunColor * NoL * bottomTex * (1.0 - clamp(length(dg) * 8.0, 0.0, 0.45));
-    float bottomVis = clamp(transm.g * pow(1.0 - graze, 1.5) * smoothstep(6.0, 1.5, depth), 0.0, 1.0);
-    body = mix(body, bottomIllum * transm, bottomVis);
+    vec2 depthGrad = vec2(dFdx(bathyDepth), dFdy(bathyDepth));
+    vec3 seabedIllum = uSunColor * NoL * seabedAlbedo * (1.0 - clamp(length(depthGrad) * 6.0, 0.0, 0.50));
+    vec3 seabedReflectance = seabedIllum * exp(-JerlovII_Sigma * (2.0 * bathyDepth));
 
-    // --- whitecap: air-entrainment model ----------------------------------
-    float A = texture(uFoam, vUv).r;
-    float core = smoothstep(0.50, 0.90, A);
-    vec2 suv = vec2(dot(vUv, uPropDir) * 1.1,
-                    dot(vUv, vec2(-uPropDir.y, uPropDir.x)) * 5.0);
-    float streak = 1.0;
-    if (uHasFoamTex == 1)
-        streak = smoothstep(0.08, 0.45, texture(uFoamOpacity, suv).r);
-    float mid = smoothstep(0.15, 0.55, A) * (1.0 - core) * streak;
-    float spray = smoothstep(0.60, 0.95, noise(vUv * 260.0 + uTime * 0.05))
-                * smoothstep(0.35, 0.75, A) * (1.0 - core);
-    float foamVis = clamp(core * 0.75 + mid * 0.60 + spray * 0.35, 0.0, 1.0);
+    // Continuous depth weighting without artificial step functions
+    float seabedVisibility = exp(-0.18 * bathyDepth) * pow(1.0 - graze, 1.2);
+    vec3 body = mix(deepUpwelling * waterTransmittance, seabedReflectance, seabedVisibility);
 
-    // --- Cook-Torrance specular ------------------------------------------
-    float rough = 0.05;
-    if (uHasFoamTex == 1) {
-        float fr = texture(uFoamRough, vUv * 7.0).r;
-        rough = mix(0.05, clamp(fr, 0.25, 0.85), foamVis);
-    }
+    // --- PHYSICAL OPTICS PATCH 3: Continuous Air Entrainment & Optical Foam Volume ---
+    float airFraction = texture(uFoam, vUv).r;
+    // Optical thickness of aerated foam (continuous physical exponential function)
+    float aeratedOpacity = 1.0 - exp(-2.4 * max(airFraction, 0.0));
+
+    // --- Cook-Torrance Specular Reflection --------------------------------
+    float roughness = mix(0.04, 0.65, aeratedOpacity);
     vec3 F = F_Schlick(VoH, vec3(F0));
-    float D = D_GGX(NoH, rough);
-    float G = G_Smith(float(NoV), NoL, rough);
-    vec3 spec = F * D * G / max(4.0 * NoV * NoL, 1e-4) * uSunColor * NoL;
+    float D = D_GGX(NoH, roughness);
+    float G = G_Smith(float(NoV), NoL, roughness);
+    vec3 specularReflectance = F * D * G / max(4.0 * NoV * NoL, 1e-4) * uSunColor * NoL;
 
-    // --- sky reflection through Fresnel -----------------------------------
+    // Fresnel Sky Reflection
     vec3 R = reflect(-V, N);
-    vec3 skyRef = mix(skyRadiance * 0.6, skyRadiance * 1.5, pow(clamp(1.0 - R.y, 0.0, 1.0), 2.2));
-    vec3 color = body + F * skyRef * 1.10 + spec * 1.4 + skyRadiance * 0.05;
+    vec3 skyReflection = mix(skyRadiance * 0.6, skyRadiance * 1.4, pow(clamp(1.0 - R.y, 0.0, 1.0), 2.2));
+    vec3 color = body + F * skyReflection * 1.05 + specularReflectance * 1.35;
 
-    // --- Volumetric Subsurface Scattering (SSS) --------------------------
-    // Physical forward phase scattering through crests scaled by sun color
+    // --- PHYSICAL OPTICS PATCH 4: Henyey-Greenstein Volumetric Subsurface Scattering ---
     {
-        float crestH = texture(uHeight, vUv).r;
-        float crestness = smoothstep(0.5, 6.0, crestH);
-        float forwardScatter = pow(clamp(dot(-V, L), 0.0, 1.0), 3.0);
-        float sideTranslucency = pow(clamp(1.0 - NoV, 0.0, 1.0), 2.0);
-        vec3 sssColor = exp(-WATER_SIGMA * 2.0) * uSunColor;
-        color += sssColor * (forwardScatter * 1.8 + sideTranslucency * 0.6) * crestness * (1.0 - foamVis * 0.8);
+        float crestness = smoothstep(0.2, 5.0, max(surfaceHgt, 0.0));
+        float cosTheta = dot(-V, L);
+        // Henyey-Greenstein phase function (g = 0.72 forward scattering parameter for seawater)
+        float g_hg = 0.72;
+        float hgPhase = (1.0 - g_hg * g_hg) / pow(1.0 + g_hg * g_hg - 2.0 * g_hg * cosTheta, 1.5);
+
+        vec3 sssTransmission = exp(-JerlovII_Sigma * 1.5) * uSunColor * hgPhase * 0.28;
+        color += sssTransmission * crestness * (1.0 - aeratedOpacity * 0.75);
     }
 
-    // --- Soft sea foam & aerated layer (Pure Inverse Light Transport Model) ---
-    // Foam bubbles do NOT have a fixed grey or white color; air-entrained bubbles are microscopic
-    // dielectric spheres that multiple-scatter local scene irradiance (Direct Sunlight + Sky Radiance)
-    // weighted by the optical thickness of the aerated air-volume (thick = 1 - e^-sigma_a*A).
-    float thick = 1.0 - exp(-2.2 * clamp(A, 0.0, 1.5));
-
-    // Dynamic micro-normal perturbation of foam bubbles reacting to local light direction L and normal N
-    vec3 fn = vec3(0.0, 1.0, 0.0);
+    // --- PHYSICAL OPTICS PATCH 5: Continuous Sea Foam Light Scattering (No Sharp Gap) ---
+    // Aerated bubbles scatter local incident irradiance without artificial stark color gaps
+    vec3 foamNormal = N;
     if (uHasFoamTex == 1) {
-        fn = normalize(N + (texture(uFoamNormal, vUv * 7.0).rgb * 2.0 - 1.0) * 0.35);
-    } else {
-        fn = N;
+        vec3 microNorm = texture(uFoamNormal, vUv * 7.0).rgb * 2.0 - 1.0;
+        foamNormal = normalize(N + microNorm * 0.25);
     }
-    float foamNoL = clamp(dot(fn, L), 0.0, 1.0);
-    float foamVoH = clamp(dot(V, normalize(V + L)), 0.0, 1.0);
-    vec3 foamFresnel = F_Schlick(foamVoH, vec3(0.04));
+    float foamNoL = clamp(dot(foamNormal, L), 0.0, 1.0);
+    vec3 incidentFoamIrradiance = uSunColor * (foamNoL * 0.85 + 0.15) + skyRadiance * 0.60;
 
-    // Incident light inverse-reconstructed: Direct Sun + Diffuse Rayleigh Sky
-    vec3 incidentIrradiance = uSunColor * (foamNoL * 0.90 + 0.10) + skyRadiance * 0.65;
+    // Foam color is a continuous blend between aerated water body and light-scattering air volume
+    vec3 aeratedWaterCol = body * 1.4 + sssTransmission * 0.5;
+    vec3 whitecapScattering = incidentFoamIrradiance * 0.90;
+    vec3 foamColor = mix(aeratedWaterCol, whitecapScattering, aeratedOpacity);
 
-    // Optical aeration color: Thin air entrainment transmits water body light;
-    // Thick whitecaps multiple-scatter incident light with forward/backward phase function.
-    vec3 multipleScatterCoeff = incidentIrradiance * (0.80 + 0.20 * foamFresnel);
-    vec3 foamCol = mix(body * (1.0 + 0.5 * foamNoL), multipleScatterCoeff, thick);
+    // Continuous physical blend of foam onto water surface
+    color = mix(color, foamColor, aeratedOpacity * 0.80);
 
-    // Smooth physical transition: no stark stain/patch border, completely smooth alpha-air fraction
-    color = mix(color, foamCol, foamVis * 0.85);
-
-    // --- Entrained Micro-Bubbles (Physical Spherical Glint & Refraction) ----
-    if (foamVis > 0.005) {
-        vec2 buv = vWorld.xz * 6.0;                 // ~17 cm bubbles
+    // --- PHYSICAL OPTICS PATCH 6: Entrained Micro-Bubbles (Continuous Glints) ---
+    if (airFraction > 0.001) {
+        vec2 buv = vWorld.xz * 6.0;
         vec2 cellId = floor(buv);
         vec2 f = fract(buv) - 0.5;
         float r1 = hash(cellId);
         float r2 = hash(cellId + vec2(37.0, 91.0));
         vec2 c = (vec2(r1, r2) - 0.5) * 0.7;
-        float d = length(f - c) * 2.2;
-        float alive = step(fract(r1 * 13.7 + uTime * 0.4), 0.75);
-        float sphere = smoothstep(1.0, 0.70, d) * alive;
+        float d2 = dot(f - c, f - c) * 4.84;
+        float alive = 0.5 + 0.5 * sin(r1 * 13.7 + uTime * 2.5);
+        float bubbleIntensity = exp(-d2 * 2.2) * alive;
 
-        // Fresnel glint on individual spherical bubble domes facing the camera/sun
-        vec3 bubbleNormal = normalize(vec3((f - c) * 1.5, sqrt(max(1.0 - d * d, 0.01))));
+        vec3 bubbleNormal = normalize(vec3((f - c) * 1.5, sqrt(max(1.0 - clamp(d2, 0.0, 0.99), 0.01))));
         float bubbleNoL = clamp(dot(bubbleNormal, L), 0.0, 1.0);
-        float bubbleNoV = clamp(dot(bubbleNormal, V), 0.0, 1.0);
-        vec3 bubbleGlint = uSunColor * pow(clamp(dot(reflect(-L, bubbleNormal), V), 0.0, 1.0), 16.0);
+        vec3 bubbleSpecular = uSunColor * pow(clamp(dot(reflect(-L, bubbleNormal), V), 0.0, 1.0), 18.0);
 
-        vec3 bubbleCol = mix(foamCol, incidentIrradiance * bubbleNoL + bubbleGlint, 0.40);
-        color = mix(color, bubbleCol, sphere * foamVis * thick * 0.50);
+        vec3 bubbleColor = mix(foamColor, incidentFoamIrradiance * bubbleNoL + bubbleSpecular, 0.35);
+        color = mix(color, bubbleColor, bubbleIntensity * aeratedOpacity * 0.40);
     }
 
-    // --- distance haze into the backdrop (derived from sky light) --------
-    float dist = length(uCamPos - vWorld);
-    float haze = 1.0 - exp(-dist * 0.00035);
-    color = mix(color, skyRadiance * 1.2, haze);
+    // Atmospheric Distance Fog
+    float cameraDist = length(uCamPos - vWorld);
+    float atmosphericHaze = 1.0 - exp(-cameraDist * 0.00032);
+    color = mix(color, skyRadiance * 1.15, atmosphericHaze);
 
     fragColor = vec4(color, 1.0);
 }
