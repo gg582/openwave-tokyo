@@ -112,7 +112,7 @@ private:
 
     unsigned compileProgram(const char* vertSrc, const char* fragSrc);
     unsigned makeColorTarget(int w, int h, unsigned* tex);
-    void     buildCamera();
+    void buildCamera(float time = 0.0f);
     bool     loadTerrain();
     bool     initSeaFar();
 };

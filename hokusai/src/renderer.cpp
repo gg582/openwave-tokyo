@@ -248,23 +248,29 @@ static void matMul(float* o, const float* a, const float* b)
         }
 }
 
-void Renderer::buildCamera()
+void Renderer::buildCamera(float time)
 {
     const float aspect = (float)cfg_.width / (float)cfg_.height;
     float proj[16], view[16];
     // far plane must reach the real Fuji terrain (~90 km out)
     matPerspective(proj, cfg_.fovDeg * 3.14159265f / 180.0f, aspect, 0.5f,
                    250000.0f);
-    // eye above the swell at the southern edge of the patch, aimed WNW
-    // (bearing 289 deg) toward the actual Mount Fuji — the viewpoint of
-    // the print: rolling crests fill the frame, the peak sits upper-right
-    camPos_[0] = 0.0f; camPos_[1] = cfg_.camHeight; camPos_[2] = cfg_.domain * 0.30f;   // just seaward of the break line
-    const float brg = 289.0f * 3.14159265f / 180.0f;
+
+    // Natural handheld ocean camera motion: subtle organic sway + wave-sync heave
+    const float swayX = 18.0f * sinf(0.24f * time + 0.5f) + 12.0f * cosf(0.55f * time);
+    const float swayY = 1.8f * sinf(0.38f * time + 1.2f) + 1.2f * cosf(0.81f * time);
+    const float swayZ = 22.0f * cosf(0.18f * time);
+
+    camPos_[0] = swayX;
+    camPos_[1] = cfg_.camHeight + swayY;
+    camPos_[2] = cfg_.domain * 0.30f + swayZ;   // just seaward of the break line
+
+    const float brg = (289.0f + 0.45f * sinf(0.31f * time)) * 3.14159265f / 180.0f;
     const float dir[3] = { sinf(brg), 0.0f, -cosf(brg) };
     const float at[3]  = { camPos_[0] + dir[0] * 5000.0f,
-                           camPos_[1] - 55.0f,
+                           camPos_[1] - 55.0f + 3.0f * cosf(0.42f * time),
                            camPos_[2] + dir[2] * 5000.0f };
-    const float up[3]  = { 0.0f, 1.0f, 0.0f };
+    const float up[3]  = { 0.015f * sinf(0.27f * time), 1.0f, 0.0f };
 
     float f[3] = { at[0]-camPos_[0], at[1]-camPos_[1], at[2]-camPos_[2] };
     float fl = sqrtf(f[0]*f[0]+f[1]*f[1]+f[2]*f[2]);
@@ -826,6 +832,8 @@ static void bindTex(int unit, GLuint tex, GLint loc, int idx)
 void Renderer::renderFrame(float time, float tide, const float4* sprayPos,
                            int sprayCount)
 {
+    buildCamera(time);
+
     const int w = cfg_.width, h = cfg_.height;
     glViewport(0, 0, w, h);
 
