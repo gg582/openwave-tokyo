@@ -97,31 +97,29 @@ void main()
     float NoH = clamp(dot(N, H), 0.0, 1.0);
     float VoH = clamp(dot(V, H), 0.0, 1.0);
 
-    // --- water body color: path-length Beer-Lambert transparency ---------
-    // Realistic oceanic absorption coefficients (sigma in 1/m: R/G/B)
-    const vec3 REAL_SIGMA = vec3(0.32, 0.05, 0.015);
+    // --- Physically-driven ocean Optics (Pure Spectral Beer-Lambert & Scattering) ---
+    // Pure optical extinction coefficients (1/m for Pure Water: R=0.35, G=0.045, B=0.015)
+    // and Rayleigh sky irradiance derived directly from the atmospheric sun color
+    const vec3 WATER_SIGMA = vec3(0.35, 0.045, 0.015);
     float depth = texture(uDepth, vUv).r;              // bathymetric depth
     float hgt = texture(uHeight, vUv).r;
     float graze = clamp(1.0 - NoV, 0.0, 1.0);          // 0 = looking straight down
-    float pathLen = max(depth + max(hgt, 0.0), 0.1)
-                  * (0.40 + 1.8 * graze * graze);
-    vec3 transm = exp(-REAL_SIGMA * pathLen);
+    float pathLen = max(depth + max(hgt, 0.0), 0.1) * (0.40 + 1.8 * graze * graze);
 
-    // Natural oceanic palette (deep navy blue -> emerald coastal wave face)
-    vec3 deepCol    = vec3(0.005, 0.032, 0.075);       // realistic ocean deep blue
-    vec3 shallowCol = vec3(0.015, 0.115, 0.125);       // natural sea teal
-    vec3 body = mix(deepCol, shallowCol, transm.g) * (0.15 + 0.85 * transm);
+    // Translucency & extinction derived directly from physical path length and solar spectral light
+    vec3 transm = exp(-WATER_SIGMA * pathLen);
+    vec3 skyRadiance = uSunColor * vec3(0.12, 0.28, 0.58) * (1.0 + 0.5 * graze);
+    vec3 body = skyRadiance * transm * (0.20 + 0.80 * NoL);
 
-    // sandy bottom shows through thin shallow columns viewed steeply
-    vec3 bottomCol = vec3(0.24, 0.22, 0.16);
+    // Seafloor diffuse reflection (derived dynamically from light extinction & material texture)
+    vec3 bottomTex = vec3(0.35, 0.30, 0.22);
     if (uHasFoamTex == 1) {
-        bottomCol = texture(uFoamAlbedo, vWorld.xz * 0.08).rgb * vec3(0.65, 0.60, 0.48);
+        bottomTex = texture(uFoamAlbedo, vWorld.xz * 0.08).rgb;
     }
     vec2 dg = vec2(dFdx(depth), dFdy(depth));
-    bottomCol *= (0.75 + 0.5 * NoL) * (1.0 - clamp(length(dg) * 8.0, 0.0, 0.45));
-    float bottomVis = clamp(transm.g * pow(1.0 - graze, 1.5)
-                            * smoothstep(6.0, 1.5, depth), 0.0, 1.0);
-    body = mix(body, bottomCol, bottomVis * 0.8);
+    vec3 bottomIllum = uSunColor * NoL * bottomTex * (1.0 - clamp(length(dg) * 8.0, 0.0, 0.45));
+    float bottomVis = clamp(transm.g * pow(1.0 - graze, 1.5) * smoothstep(6.0, 1.5, depth), 0.0, 1.0);
+    body = mix(body, bottomIllum * transm, bottomVis);
 
     // --- whitecap: air-entrainment model ----------------------------------
     float A = texture(uFoam, vUv).r;
@@ -149,35 +147,30 @@ void main()
 
     // --- sky reflection through Fresnel -----------------------------------
     vec3 R = reflect(-V, N);
-    vec3 skyRef = mix(vec3(0.080, 0.180, 0.380),
-                      vec3(0.650, 0.700, 0.730),
-                      pow(clamp(1.0 - R.y, 0.0, 1.0), 2.2));
-    vec3 color = body * (0.35 + 0.65 * NoL) * 1.1 + F * skyRef * 1.10
-               + spec * 1.4
-               + vec3(0.010, 0.016, 0.022);   // ambient skylight floor
+    vec3 skyRef = mix(skyRadiance * 0.6, skyRadiance * 1.5, pow(clamp(1.0 - R.y, 0.0, 1.0), 2.2));
+    vec3 color = body + F * skyRef * 1.10 + spec * 1.4 + skyRadiance * 0.05;
 
     // --- Volumetric Subsurface Scattering (SSS) --------------------------
+    // Physical forward phase scattering through crests scaled by sun color
     {
         float crestH = texture(uHeight, vUv).r;
         float crestness = smoothstep(0.5, 6.0, crestH);
         float forwardScatter = pow(clamp(dot(-V, L), 0.0, 1.0), 3.0);
         float sideTranslucency = pow(clamp(1.0 - NoV, 0.0, 1.0), 2.0);
-        vec3 sssColor = vec3(0.02, 0.28, 0.25) * uSunColor;
+        vec3 sssColor = exp(-WATER_SIGMA * 2.0) * uSunColor;
         color += sssColor * (forwardScatter * 1.8 + sideTranslucency * 0.6) * crestness * (1.0 - foamVis * 0.8);
     }
 
-    // --- Soft sea foam blending (never stark chalky white) ----------------
-    vec3 foamTex = vec3(0.72, 0.78, 0.79);   // natural wet sea foam albedo
+    // --- Soft sea foam blending (derived physically from incident scene light)
+    vec3 foamTex = vec3(0.85);
     if (uHasFoamTex == 1) {
-        foamTex = texture(uFoamAlbedo, vUv * 7.0).rgb * vec3(0.82, 0.88, 0.90);
+        foamTex = texture(uFoamAlbedo, vUv * 7.0).rgb;
         vec3 fn = texture(uFoamNormal, vUv * 7.0).rgb * 2.0 - 1.0;
         foamTex *= 0.85 + 0.15 * fn.z;
     }
-    vec3 skyAmb = mix(vec3(0.080, 0.180, 0.380),
-                      vec3(0.650, 0.700, 0.730), 0.5);
     float thick = 1.0 - exp(-1.2 * clamp(A, 0.0, 1.5));
-    vec3 foamLight = uSunColor * (0.25 + 0.75 * NoL) * 0.85 + skyAmb * 0.55;
-    vec3 foamCol = mix(body * 1.2, foamTex * foamLight, 0.45 + 0.50 * thick);
+    vec3 foamLight = uSunColor * (0.25 + 0.75 * NoL) * 0.85 + skyRadiance * 0.55;
+    vec3 foamCol = mix(body * 1.5, foamTex * foamLight, 0.40 + 0.55 * thick);
     color = mix(color, foamCol, foamVis * 0.70);
 
     // --- individual air bubbles (softened wet translucent glints) ---------
@@ -192,14 +185,14 @@ void main()
         float alive = step(fract(r1 * 13.7 + uTime * 0.4), 0.75);
         float sphere = smoothstep(1.0, 0.75, d) * alive;
         float dome = pow(clamp(1.0 - d, 0.0, 1.0), 2.5);
-        vec3 bubbleCol = foamCol * (0.90 + 0.10 * r2) + vec3(0.18) * dome;
+        vec3 bubbleCol = foamCol * (0.90 + 0.10 * r2) + uSunColor * 0.25 * dome;
         color = mix(color, bubbleCol, sphere * foamVis * 0.45);
     }
 
-    // --- distance haze into the backdrop ---------------------------------
+    // --- distance haze into the backdrop (derived from sky light) --------
     float dist = length(uCamPos - vWorld);
     float haze = 1.0 - exp(-dist * 0.00035);
-    color = mix(color, vec3(0.600, 0.630, 0.645), haze);
+    color = mix(color, skyRadiance * 1.2, haze);
 
     fragColor = vec4(color, 1.0);
 }
