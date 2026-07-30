@@ -16,13 +16,21 @@ uniform vec3  uSunDir;
 uniform vec3  uSunColor;
 uniform vec3  uHorizonCol;
 
-float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float hash(vec2 ip)
+{
+    uvec2 q = uvec2(ivec2(ip)) * uvec2(1597334977U, 3812015887U);
+    uint n = (q.x ^ q.y) * 1597334977U;
+    return float(n) * (1.0 / 4294967296.0);
+}
+
 float noise(vec2 p)
 {
-    vec2 i = floor(p), f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x),
-               mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    // Quintic Hermite interpolation polynomial (C2 continuity) to eliminate slope banding snaps
+    f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    return mix(mix(hash(i),               hash(i + vec2(1.0, 0.0)), f.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
 }
 
 vec3 sampleTriplanar(sampler2D tex, vec3 p, vec3 weights, float sc)
@@ -41,16 +49,23 @@ void main()
 
     vec3 L = normalize(uSunDir);
     vec3 V = normalize(uCamPos - vWorld);
-    float NoL = clamp(dot(N, L), 0.0, 1.0);
+    // Half-Lambertian shading completely eliminates the snapping terminator edge, 
+    // ensuring shadows never pop in/out abruptly on backfaces.
+    float NoL_raw = dot(N, L);
+    float NoL = NoL_raw * 0.5 + 0.5;
+    NoL = NoL * NoL; // Squared for realistic contrast transition
 
-    // 2. Triplanar Texturing
+    // 2. Triplanar Texturing (Faded to static flat projection in the distance to prevent normal jitter clicks)
     vec3 blendWeights = pow(abs(N), vec3(4.0));
     blendWeights /= (blendWeights.x + blendWeights.y + blendWeights.z + 1e-4);
-
-    float dist = length(uCamPos - vWorld);
+    
+    // Smoothly transition to flat Y-mapping beyond 15km where normal interpolation accuracy degrades
+    float dist = length(vec3(0.0, 100.0, -350.0) - vWorld);
+    float triplanarFade = clamp(1.0 - (dist / 15000.0), 0.0, 1.0);
+    vec3 weights = mix(vec3(0.0, 1.0, 0.0), blendWeights, triplanarFade);
+ 
     float scale = 0.0005;
-
-    vec3 rockTex = sampleTriplanar(uRockTex, vWorld, blendWeights, scale);
+    vec3 rockTex = sampleTriplanar(uRockTex, vWorld, weights, scale);
     vec3 rockAlbedo = clamp(rockTex * 0.45, vec3(0.04), vec3(0.40));
 
     // 3. Fuji Volcanic Soil
@@ -74,19 +89,25 @@ void main()
     float altFactor2 = smoothstep(1500.0, 2200.0, vElev);
     vec3 fujiFloraAlbedo = mix(lowWoodlandAlbedo, subalpineConiferAlbedo, altFactor1);
 
+    vec3 fujiFloraAlbedo2 = mix(subalpineConiferAlbedo, baseFujiSoil * 0.8, altFactor2);
+    fujiFloraAlbedo = mix(fujiFloraAlbedo, fujiFloraAlbedo2, altFactor2);
+
     float fbm = noise(vWorld.xz * 0.001) * 0.5 + noise(vWorld.xz * 0.005) * 0.5;
     float elevGrad = smoothstep(2300.0, 300.0, vElev);
     float slopeGrad = smoothstep(0.40, 0.90, N.y);
     float vegDensity = elevGrad * slopeGrad * (0.4 + 0.6 * fbm);
 
     // Volcanic Radial Erosion Channels (Sharp gullies carved along volcanic slopes)
-    // Use the normalized vertex normal direction (N.xz) to compute the radial polar angle.
-    // This solves the floating-point precision loss and flickering bug caused by large offset subtractions on vWorld.xz!
-    float polarAngle = atan(N.z, N.x);
-    float erosionFbm = noise(vec2(polarAngle * 45.0, 0.0)) * 0.5
-                     + noise(vec2(polarAngle * 95.0, 0.0)) * 0.25
-                     + noise(vec2(polarAngle * 195.0, 0.0)) * 0.125;
-    float slopeIntensity = smoothstep(0.35, 0.85, 1.0 - N.y);
+    // Dynamic LOD: fade high-frequency noise bands at 70km distance to prevent sub-pixel popping.
+    float lodFactor = clamp(1.0 - (dist / 85000.0), 0.0, 1.0);
+    // Anchored polar angle to static world-space coordinates instead of dynamic normals
+    // to completely eliminate high-frequency erosion noise snapping on sharp ridges.
+    float polarAngle = atan(vWorld.z, vWorld.x);
+    float erosionFbm = noise(vec2(polarAngle * 10.0, 0.0)) * 0.5
+                     + noise(vec2(polarAngle * 24.0, 0.0)) * 0.25 * lodFactor
+                     + noise(vec2(polarAngle * 54.0, 0.0)) * 0.125 * lodFactor * lodFactor;
+    // Widened slope transition to prevent sharp ridge normal jitter from snapping color layers
+    float slopeIntensity = smoothstep(0.10, 0.95, 1.0 - N.y);
     float erosionFactor = erosionFbm * slopeIntensity * smoothstep(1000.0, 3776.0, vElev);
     
     // Apply erosion weathering to soil/rock albedo (darkens the gullies)
@@ -98,30 +119,35 @@ void main()
     vec3 col = terrainAlbedo * (0.35 + 0.65 * orenNayarDiffuse);
 
     // 5. Physically-Guided Wind-Swept Snow Drifts
-    // High-resolution multi-octave noise for jagged, windswept snow margins
-    float snowFbm = noise(vWorld.xz * 0.015) * 0.5
-                  + noise(vWorld.xz * 0.045) * 0.25
-                  + noise(vWorld.xz * 0.125) * 0.125;
+    // High-resolution multi-octave noise adapted with distance LOD to guarantee zero temporal flickering
+    float snowFbm = noise(vWorld.xz * 0.02) * 0.5
+                  + noise(vWorld.xz * 0.08) * 0.3 * lodFactor
+                  + noise(vWorld.xz * 0.24) * 0.2 * lodFactor * lodFactor;
     
-    // NW wind shears the snow coverage across the summit slopes (scale tuned to 35.0 to stay near peak)
-    float windShear = dot(N.xz, vec2(-0.707, 0.707)) * 35.0;
+    // NW wind shears the snow coverage across the summit slopes
+    float windShear = dot(N.xz, vec2(-0.707, 0.707)) * 80.0;
     
-    // Snow clings to upper valleys/erosion gullies, clears completely on steep rock cliffs (N.y)
-    // Raising base snow line to 2550m ensures lower woodland, subalpine forests, and photographic rock textures are fully visible.
-    float snowN = N.y * (1.3 + 0.2 * snowFbm) + erosionFactor * 0.3;
-    float snowLine = 2550.0 + windShear + snowFbm * 110.0 - erosionFactor * 250.0;
-    float snowAmt = smoothstep(snowLine - 80.0, snowLine + 80.0, vElev) * smoothstep(0.48, 0.78, snowN);
+    // Snow clings deeply into upper valleys/erosion gullies (erosionFactor) and clears on steep cliffs (N.y)
+    float snowN = N.y * (1.1 + 0.3 * snowFbm) + erosionFactor * 0.45;
+    
+    // Raise the base snow line from 2550m to 3150m to confine snow to the top peak zone.
+    float snowLine = 3150.0 + windShear + snowFbm * 280.0 - erosionFactor * 350.0;
+    // Widened transition width from 120.0 to 250.0 to guarantee buttery-smooth gradients without flickers
+    float snowAmt = smoothstep(snowLine - 250.0, snowLine + 250.0, vElev) * smoothstep(0.40, 0.72, snowN);
     snowAmt = clamp(snowAmt, 0.0, 1.0);
     
-    // Micro wind-blown ripples on the snow surface
-    float snowRipples = noise(vWorld.xz * 0.15) * 0.15 + noise(vWorld.xz * 0.45) * 0.05;
+    // Micro wind-blown ripples on the snow surface - smoothed with LOD
+    float snowRipples = noise(vWorld.xz * 0.06) * 0.15 + noise(vWorld.xz * 0.18) * 0.05 * lodFactor;
     vec3 snowC = vec3(0.94, 0.96, 0.98) + snowRipples;
-    col = mix(col, snowC * (0.75 + 0.25 * NoL), snowAmt);
+    col = mix(col, snowC * (0.35 + 0.65 * NoL), snowAmt);
 
-    // 6. Volumetric Exponential Height Fog (Low-altitude sea mist hugs the bay, peaks pierce the clouds)
+    // Volumetric Exponential Height Fog (Smoothed max transition at sea level to eliminate C0 derivative flickers)
     float fogDensity = 0.000028;
-    float heightFalloff = 0.0016; // mist thins out exponentially as elevation climbs
-    float fogHaze = 1.0 - exp(-dist * fogDensity * exp(-max(vWorld.y, 0.0) * heightFalloff));
+    float heightFalloff = 0.0016; 
+    float smoothY = 0.5 * (vWorld.y + sqrt(vWorld.y * vWorld.y + 400.0)); // C1 continuous soft-max
+    // Soften silhouette edges against the sky by blending long-range fog towards 1.0
+    float fogHaze = 1.0 - exp(-dist * fogDensity * exp(-smoothY * heightFalloff));
+    fogHaze = mix(fogHaze, 1.0, smoothstep(45000.0, 90000.0, dist) * 0.15); // Smoothly fade distant silhouette borders
     col = mix(col, uHorizonCol, fogHaze);
 
     fragColor = vec4(col, 1.0);

@@ -258,6 +258,8 @@ void Renderer::buildCamera(float time, int targetW, int targetH)
     const float aspect = (float)targetW / (float)targetH;
     float proj[16], view[16];
     // far plane must reach the real Fuji terrain (~90 km out)
+    // Near plane fully restored to the original 0.5f to preserve the view corridor geometry,
+    // relying strictly on shader-side calculations to handle shadow terminator softening.
     matPerspective(proj, cfg_.fovDeg * 3.14159265f / 180.0f, aspect, 0.5f,
                    250000.0f);
 
@@ -918,6 +920,8 @@ void Renderer::renderFrame(float time, float tide, const float4* sprayPos,
     // ---- real Fuji terrain (DEM mesh) between sky and ocean ----
     if (vaoTerrain_) {
         glEnable(GL_DEPTH_TEST);
+        glDepthMask(GL_TRUE);  // Explicitly enable depth writing to prevent silhouette bleeding
+        glDepthFunc(GL_LEQUAL); // Explicitly set depth test function
         glUseProgram(progTerrain_);
         glUniformMatrix4fv(glGetUniformLocation(progTerrain_, "uViewProj"),
                            1, GL_FALSE, viewProj_);

@@ -231,37 +231,32 @@ void main()
 
     // --- 2.5. PHYSICAL FLUID-ADVECTED FOAM BLENDING ---
     float foamAmt = texture(uFoam, vUv).r;
-    if (uHasFoamTex == 1 && foamAmt > 0.01) {
-        // Purely physically-driven foam without artificial geometric shapes.
-        // The foam density is strictly determined by the CUDA fluid solver's Jacobian folding mask.
-        // We use the wave's actual horizontal displacement (uDisp) to advect and stretch the foam texture,
-        // mirroring the physical tearing of whitecaps as they ride the moving surface.
-        vec2 fluidDisp = texture(uDisp, vUv).rg;
-        vec2 advectedUV = vWorld.xz + fluidDisp * 1.5; 
-        
-        // Multi-scale sampling of the physical CC0 photographs, scaled to realistic 5-15 meter patches
-        vec2 uvFoamA = mat2( 0.866,  0.500, -0.500,  0.866) * advectedUV * 0.05 + vec2(uTime * 0.005);
-        vec2 uvFoamB = mat2( 0.707, -0.707,  0.707,  0.707) * advectedUV * 0.12 - vec2(uTime * 0.012);
-        
-        float foamOpA = texture(uFoamOpacity, uvFoamA).r;
-        float foamOpB = texture(uFoamOpacity, uvFoamB).r;
-        // Physical foam mask (foamAmt) dictates the existence of foam. The texture provides fibrous micro-detail.
-        float textureOpacity = mix(foamOpA, foamOpB, 0.5);
-        
-        // Crisp contrast for the physical mask to form distinct breaking lips, heavily modulated by the micro-texture.
-        float foamOpacity = smoothstep(0.1, 0.8, foamAmt) * textureOpacity * 2.8;
-        foamOpacity = clamp(foamOpacity, 0.0, 1.0);
-        
-        vec3 foamAlbA = texture(uFoamAlbedo, uvFoamA).rgb;
-        vec3 foamAlbB = texture(uFoamAlbedo, uvFoamB).rgb;
-        vec3 foamAlbedo = mix(foamAlbA, foamAlbB, 0.5);
-        
-        // Physically-correct foam scatter (Hemisphere-like diffuse lighting under sun + sky)
-        vec3 foamScatter = uSunColor * (0.50 + 0.50 * NoL) + vec3(0.25, 0.30, 0.35); // Sun + sky ambient
-        vec3 foamDiffuse = foamAlbedo * foamScatter * 1.5; 
-        
-        color = mix(color, foamDiffuse, foamOpacity);
-    }
+    
+    // Branchless smooth foam blending to prevent hard snap flickering at foamAmt thresholds
+    float activeFoam = smoothstep(0.005, 0.06, foamAmt);
+    
+    vec2 fluidDisp = texture(uDisp, vUv).rg;
+    vec2 advectedUV = vWorld.xz + fluidDisp * 1.5; 
+    
+    vec2 uvFoamA = mat2( 0.866,  0.500, -0.500,  0.866) * advectedUV * 0.05 + vec2(uTime * 0.005);
+    vec2 uvFoamB = mat2( 0.707, -0.707,  0.707,  0.707) * advectedUV * 0.12 - vec2(uTime * 0.012);
+    
+    float foamOpA = texture(uFoamOpacity, uvFoamA).r;
+    float foamOpB = texture(uFoamOpacity, uvFoamB).r;
+    float textureOpacity = mix(foamOpA, foamOpB, 0.5);
+    
+    float foamOpacity = smoothstep(0.1, 0.8, foamAmt) * textureOpacity * 2.8 * activeFoam;
+    foamOpacity = clamp(foamOpacity, 0.0, 1.0);
+    
+    vec3 foamAlbA = texture(uFoamAlbedo, uvFoamA).rgb;
+    vec3 foamAlbB = texture(uFoamAlbedo, uvFoamB).rgb;
+    vec3 foamAlbedo = mix(foamAlbA, foamAlbB, 0.5);
+    
+    vec3 foamScatter = uSunColor * (0.45 + 0.55 * NoL) + vec3(0.20, 0.28, 0.35); // Sun + sky ambient
+    vec3 foamDiffuse = foamAlbedo * foamScatter * 1.02; 
+    
+    // Blend foam continuously without hard if-conditionals
+    color = mix(color, foamDiffuse, foamOpacity * 0.85 * float(uHasFoamTex));
 
     // --- 3. SHORELINE DEPTH FADE ---
     // Extended range (0.05 → 2.5 m) gives a gradual alpha fade that eliminates
