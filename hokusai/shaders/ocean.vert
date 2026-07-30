@@ -19,11 +19,11 @@ out vec2 vUv;
 void main()
 {
     vec2 uv = aGrid;
-    float h = texture(uHeight, uv).r + uTide;   // tide lifts the whole sheet
+    // Continuous bicubic/bilinear height sampling from CUDA texture
+    float h = texture(uHeight, uv).r + uTide;
     vec2  d = texture(uDisp, uv).rg;
 
-    // grid maps to a domain-sized patch centered on the origin;
-    // j rows run toward -z (north, into the bay)
+    // Continuous world position mapping without discrete grid offsets
     vec3 world = vec3((uv.x - 0.5) * uDomain,
                       h,
                       (uv.y - 0.5) * uDomain);

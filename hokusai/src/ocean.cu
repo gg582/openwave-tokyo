@@ -211,7 +211,7 @@ __global__ void steepen_shuffle_kernel(const float* __restrict__ hIn,
                                        float dtEff, float tide)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    const int j = blockIdx.y;
+    const int j = blockIdx.y * blockDim.y + threadIdx.y;
     if (i >= n || j >= n) return;
     const int e = j * n + i;
     const int lane = threadIdx.x & 31;
@@ -481,8 +481,7 @@ void Ocean::advance(float t, float tide, float gust, cudaStream_t stream)
         if (mode_ == FFT_TRADITIONAL) {
             steepen_trad_kernel<<<bpg, tpb, 0, stream>>>(d_h, d_depth, d_h, n, cell, pdir, dtEff, tide);
         } else {
-            const dim3 bpgSteepen(n / 32, n);
-            steepen_shuffle_kernel<<<bpgSteepen, 32, 0, stream>>>(d_h, d_depth, d_h, n, cell, pdir, dtEff, tide);
+            steepen_shuffle_kernel<<<bpg, tpb, 0, stream>>>(d_h, d_depth, d_h, n, cell, pdir, dtEff, tide);
         }
     }
 }
