@@ -161,20 +161,36 @@ void main()
         color += sssColor * (forwardScatter * 1.8 + sideTranslucency * 0.6) * crestness * (1.0 - foamVis * 0.8);
     }
 
-    // --- Soft sea foam blending (derived physically from incident scene light)
-    vec3 foamTex = vec3(0.85);
-    if (uHasFoamTex == 1) {
-        foamTex = texture(uFoamAlbedo, vUv * 7.0).rgb;
-        vec3 fn = texture(uFoamNormal, vUv * 7.0).rgb * 2.0 - 1.0;
-        foamTex *= 0.85 + 0.15 * fn.z;
-    }
-    float thick = 1.0 - exp(-1.2 * clamp(A, 0.0, 1.5));
-    vec3 foamLight = uSunColor * (0.25 + 0.75 * NoL) * 0.85 + skyRadiance * 0.55;
-    vec3 foamCol = mix(body * 1.5, foamTex * foamLight, 0.40 + 0.55 * thick);
-    color = mix(color, foamCol, foamVis * 0.70);
+    // --- Soft sea foam & aerated layer (Pure Inverse Light Transport Model) ---
+    // Foam bubbles do NOT have a fixed grey or white color; air-entrained bubbles are microscopic
+    // dielectric spheres that multiple-scatter local scene irradiance (Direct Sunlight + Sky Radiance)
+    // weighted by the optical thickness of the aerated air-volume (thick = 1 - e^-sigma_a*A).
+    float thick = 1.0 - exp(-2.2 * clamp(A, 0.0, 1.5));
 
-    // --- individual air bubbles (softened wet translucent glints) ---------
-    if (foamVis > 0.01) {
+    // Dynamic micro-normal perturbation of foam bubbles reacting to local light direction L and normal N
+    vec3 fn = vec3(0.0, 1.0, 0.0);
+    if (uHasFoamTex == 1) {
+        fn = normalize(N + (texture(uFoamNormal, vUv * 7.0).rgb * 2.0 - 1.0) * 0.35);
+    } else {
+        fn = N;
+    }
+    float foamNoL = clamp(dot(fn, L), 0.0, 1.0);
+    float foamVoH = clamp(dot(V, normalize(V + L)), 0.0, 1.0);
+    vec3 foamFresnel = F_Schlick(foamVoH, vec3(0.04));
+
+    // Incident light inverse-reconstructed: Direct Sun + Diffuse Rayleigh Sky
+    vec3 incidentIrradiance = uSunColor * (foamNoL * 0.90 + 0.10) + skyRadiance * 0.65;
+
+    // Optical aeration color: Thin air entrainment transmits water body light;
+    // Thick whitecaps multiple-scatter incident light with forward/backward phase function.
+    vec3 multipleScatterCoeff = incidentIrradiance * (0.80 + 0.20 * foamFresnel);
+    vec3 foamCol = mix(body * (1.0 + 0.5 * foamNoL), multipleScatterCoeff, thick);
+
+    // Smooth physical transition: no stark stain/patch border, completely smooth alpha-air fraction
+    color = mix(color, foamCol, foamVis * 0.85);
+
+    // --- Entrained Micro-Bubbles (Physical Spherical Glint & Refraction) ----
+    if (foamVis > 0.005) {
         vec2 buv = vWorld.xz * 6.0;                 // ~17 cm bubbles
         vec2 cellId = floor(buv);
         vec2 f = fract(buv) - 0.5;
@@ -183,10 +199,16 @@ void main()
         vec2 c = (vec2(r1, r2) - 0.5) * 0.7;
         float d = length(f - c) * 2.2;
         float alive = step(fract(r1 * 13.7 + uTime * 0.4), 0.75);
-        float sphere = smoothstep(1.0, 0.75, d) * alive;
-        float dome = pow(clamp(1.0 - d, 0.0, 1.0), 2.5);
-        vec3 bubbleCol = foamCol * (0.90 + 0.10 * r2) + uSunColor * 0.25 * dome;
-        color = mix(color, bubbleCol, sphere * foamVis * 0.45);
+        float sphere = smoothstep(1.0, 0.70, d) * alive;
+
+        // Fresnel glint on individual spherical bubble domes facing the camera/sun
+        vec3 bubbleNormal = normalize(vec3((f - c) * 1.5, sqrt(max(1.0 - d * d, 0.01))));
+        float bubbleNoL = clamp(dot(bubbleNormal, L), 0.0, 1.0);
+        float bubbleNoV = clamp(dot(bubbleNormal, V), 0.0, 1.0);
+        vec3 bubbleGlint = uSunColor * pow(clamp(dot(reflect(-L, bubbleNormal), V), 0.0, 1.0), 16.0);
+
+        vec3 bubbleCol = mix(foamCol, incidentIrradiance * bubbleNoL + bubbleGlint, 0.40);
+        color = mix(color, bubbleCol, sphere * foamVis * thick * 0.50);
     }
 
     // --- distance haze into the backdrop (derived from sky light) --------
