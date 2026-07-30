@@ -180,7 +180,7 @@ __global__ void shoaling_gain_kernel(float* __restrict__ gain,
 //                   (register exchange), only the z-axis row neighbors go
 //                   through global memory — half the global traffic
 // ---------------------------------------------------------------------------
-__global__ void steepen_trad_kernel(const float2* __restrict__ specH,
+__global__ void steepen_trad_kernel(const float* __restrict__ hIn,
                                     const float* __restrict__ depth,
                                     float* __restrict__ hOut,
                                     int n, float cell, float2 pdir,
@@ -191,11 +191,11 @@ __global__ void steepen_trad_kernel(const float2* __restrict__ specH,
     if (i >= n || j >= n) return;
     const int e = j * n + i;
 
-    const float hC = specH[e].x;
-    const float hL = specH[j * n + max(i - 1, 0)].x;
-    const float hR = specH[j * n + min(i + 1, n - 1)].x;
-    const float hD = specH[max(j - 1, 0) * n + i].x;
-    const float hU = specH[min(j + 1, n - 1) * n + i].x;
+    const float hC = hIn[e];
+    const float hL = hIn[j * n + max(i - 1, 0)];
+    const float hR = hIn[j * n + min(i + 1, n - 1)];
+    const float hD = hIn[max(j - 1, 0) * n + i];
+    const float hU = hIn[min(j + 1, n - 1) * n + i];
 
     const float dhds = ((hR - hL) * pdir.x + (hU - hD) * pdir.y)
                      / (2.0f * cell);
@@ -204,7 +204,7 @@ __global__ void steepen_trad_kernel(const float2* __restrict__ specH,
     hOut[e] = hC - dtEff * 1.35f * c * dhds;
 }
 
-__global__ void steepen_shuffle_kernel(const float2* __restrict__ specH,
+__global__ void steepen_shuffle_kernel(const float* __restrict__ hIn,
                                        const float* __restrict__ depth,
                                        float* __restrict__ hOut,
                                        int n, float cell, float2 pdir,
@@ -216,16 +216,13 @@ __global__ void steepen_shuffle_kernel(const float2* __restrict__ specH,
     const int e = j * n + i;
     const int lane = threadIdx.x & 31;
 
-    const float hC = specH[e].x;
-    // x-axis neighbors through register exchange (identical values to
-    // global reads, ~1 cycle, no memory traffic)
+    const float hC = hIn[e];
     float hL = __shfl_up_sync(0xffffffffu, hC, 1);
     float hR = __shfl_down_sync(0xffffffffu, hC, 1);
-    if (lane == 0 || i == 0)      hL = specH[j * n + max(i - 1, 0)].x;
-    if (lane == 31 || i == n - 1) hR = specH[j * n + min(i + 1, n - 1)].x;
-    // z-axis row neighbors (not expressible via lane shuffle here)
-    const float hD = specH[max(j - 1, 0) * n + i].x;
-    const float hU = specH[min(j + 1, n - 1) * n + i].x;
+    if (lane == 0 || i == 0)      hL = hIn[j * n + max(i - 1, 0)];
+    if (lane == 31 || i == n - 1) hR = hIn[j * n + min(i + 1, n - 1)];
+    const float hD = hIn[max(j - 1, 0) * n + i];
+    const float hU = hIn[min(j + 1, n - 1) * n + i];
 
     const float dhds = ((hR - hL) * pdir.x + (hU - hD) * pdir.y)
                      / (2.0f * cell);
@@ -482,10 +479,10 @@ void Ocean::advance(float t, float tide, float gust, cudaStream_t stream)
         const float cell = dx;
         const float dtEff = 0.033f;
         if (mode_ == FFT_TRADITIONAL) {
-            steepen_trad_kernel<<<bpg, tpb, 0, stream>>>(d_spec, d_depth, d_h, n, cell, pdir, dtEff, tide);
+            steepen_trad_kernel<<<bpg, tpb, 0, stream>>>(d_h, d_depth, d_h, n, cell, pdir, dtEff, tide);
         } else {
             const dim3 bpgSteepen(n / 32, n);
-            steepen_shuffle_kernel<<<bpgSteepen, 32, 0, stream>>>(d_spec, d_depth, d_h, n, cell, pdir, dtEff, tide);
+            steepen_shuffle_kernel<<<bpgSteepen, 32, 0, stream>>>(d_h, d_depth, d_h, n, cell, pdir, dtEff, tide);
         }
     }
 }
