@@ -24,15 +24,24 @@ Running the executable automatically generates four 4K output video files:
 
 ### 2. Mount Fuji DEM & Ecological Vegetation
 - **Triplanar World Mapping**: Eliminates UV stretching on the volcanic flanks.
+- **Procedural Volcanic Erosion Gullies**: Computes multi-octave radial FBM erosion channels along the slopes of Mt. Fuji to dark-weather and carve the volcanic soil texture.
+- **Wind-Swept High-Resolution Snow Drifts**: Simulates physical snow accumulation with a raised base snow line (2550m) to ensure Mount Fuji's lower forest zones and rock textures remain clearly visible. It clings deeply into upper valleys and gets sheared off by strong NW winds near the summit while clearing from steep cliffs.
 - **Ecological Zones**:
   - Lower Woodland (0–1400 m): Dense Cedar / Cypress dark olive-green.
   - Subalpine Coniferous Forest (1400–2100 m): *Abies veitchii* (Veitch fir) deep blue-green.
   - Timberline Boundary (2100–2400 m): *Larix kaempferi* (Japanese Larch) & scoria soil.
 
 ### 3. Hydro-Optics & Edo Atmosphere (`shaders/ocean.frag`)
-- **Jerlov Coastal II Optics**: Spectral attenuation ($\Sigma = (0.115, 0.032, 0.058)\text{ m}^{-1}$) matching the estuarine mix of Tokyo Bay.
-- **Hokusai Prussian Blue**: Subsurface scattering and deep upwelling colors tuned to the *Berliner Blau* palette and pre-industrial marine aerosols.
-- **Sea-Vapor Mist**: Atmospheric scattering simulating the high humidity of the pre-industrial Uraga Channel.
+- **1831 Edo Bay Optics (Nutrient-Rich Estuary)**: Spectral attenuation ($\Sigma = (0.280, 0.045, 0.115)\text{ m}^{-1}$) simulating the high microbial/phytoplankton blooms and riverine minerals (CDOM) characteristic of the pre-industrial Edogawa/Sumida river discharges.
+- **Procedural Micro-Ripple Glittering**: Generates multi-octave procedural wind ripples flowing along the swell direction. This creates high-fidelity silver sun-glints and specular glittering on close/medium range wave faces.
+- **Salinity & Refractive Index**: Adjusted to estuarine 32 PSU levels with a refractive index of $n = 1.338$ reflecting the brackish mixture of the Uraga Channel.
+- **Hokusai Prussian Blue**: Subsurface scattering and deep upwelling colors tuned to the *Berliner Blau* palette, shifted slightly toward emerald to reflect the dense marine ecology.
+- **Volumetric Exponential Height Fog**: Incorporates low-altitude exponential height fog that dense-hugs the bay and valleys while letting Mt. Fuji's majestic snow peak pierce clearly through the sky.
+
+### 4. Physically Accurate Foam & Spray (Whitecaps & Spindrift)
+- **Physical Fluid-Advected Foam Blending**: Actively samples the CUDA-generated Jacobian foam mask in the fragment shader to dictate physical air entrainment. Instead of artificial shapes, the CC0 Foam textures are dynamically advected and stretched by the fluid's horizontal displacement (`uDisp`), mirroring the tearing of real whitecaps under a hemisphere-like diffuse scatter lighting model.
+- **Stable Volumetric Spindrift Lighting**: Spray droplets and rafted bubbles are illuminated using a stable, volumetric altitude-based scattering model. This completely eliminates unnatural high-frequency shadow flickering caused by discrete surface normal sampling on flying particles.
+- **Crest Breaking & Spindrift**: Restores the physical Jacobian foam generation multiplier (1.8) and exponential foam injection rate (0.45) in the ocean solver. In violent wave-focusing regions, breaking-wave turbulence is dynamically boosted to trigger hundreds of thousands of ballistic sea spray particles (spindrift) with a telephoto-scaled 18.0x visual footprint boost.
 
 ---
 

@@ -42,6 +42,7 @@ in vec2 vUv;
 out vec4 fragColor;
 
 uniform sampler2D uHeight;
+uniform sampler2D uDisp;
 uniform sampler2D uFoam;
 uniform sampler2D uDepth;
 uniform vec3  uCamPos;
@@ -116,11 +117,11 @@ void main()
     vec3 N = normalize(mix(Ns, Nface, blendFacet));
 
     // Close-range surface detail: mix analytic spectral normal with micro-ripple
-    // normals from CC0 Foam001 material.
+    // normals from CC0 Foam001 material and high-frequency procedural wind ripples.
     if (uHasFoamTex == 1) {
         // Break up tiling with irrational rotations and disparate scales
-        vec2 uvA = mat2( 0.866, 0.500, -0.500, 0.866) * vWorld.xz * 0.32 + vec2(uTime * 0.015);
-        vec2 uvB = mat2( 0.707, -0.707, 0.707, 0.707) * (vWorld.xz + vWorld.y * 0.2) * 0.75 - vec2(uTime * 0.025);
+        vec2 uvA = mat2( 0.866,  0.500, -0.500,  0.866) * vWorld.xz * 0.32 + vec2(uTime * 0.015);
+        vec2 uvB = mat2( 0.707, -0.707,  0.707,  0.707) * (vWorld.xz + vWorld.y * 0.2) * 0.75 - vec2(uTime * 0.025);
         
         vec3 mnA = texture(uFoamNormal, uvA).rgb * 2.0 - 1.0;
         vec3 mnB = texture(uFoamNormal, uvB).rgb * 2.0 - 1.0;
@@ -130,9 +131,18 @@ void main()
         float n = noise(cp) + 0.4 * noise(cp * 2.5);
         vec2 grad = vec2(noise(cp + 0.1) - n, noise(cp + vec2(0, 0.1)) - n) * 5.0;
         
+        // Procedural micro-ripple normal (creates the shimmering silver wind-glitter across the bay)
+        vec2 ripUv = vWorld.xz * 2.2 - uPropDir * uTime * 1.85;
+        float ripA = sin(ripUv.x * 3.5 + ripUv.y * 1.5) * 0.5 + sin(ripUv.x * 7.5 - ripUv.y * 3.5) * 0.25;
+        float ripB = cos(ripUv.x * 11.5 - ripUv.y * 5.5) * 0.15 + sin(ripUv.y * 16.5) * 0.10;
+        vec2 microGrad = vec2(ripA + ripB * 0.5, ripB - ripA * 0.3) * 0.22;
+        
         float mnStrength = mix(0.40, 0.15, smoothstep(20.0, 150.0, camDist2D));
+        float ripStrength = mix(0.18, 0.04, smoothstep(40.0, 600.0, camDist2D));
+        
         N = normalize(N + vec3(mnA.x + 0.7 * mnB.x + grad.x, 0.0,
-                               mnA.z + 0.7 * mnB.z + grad.y) * mnStrength);
+                               mnA.z + 0.7 * mnB.z + grad.y) * mnStrength
+                        + vec3(microGrad.x, 0.0, microGrad.y) * ripStrength);
     }
 
     vec3 V = normalize(uCamPos - vWorld);
@@ -152,10 +162,11 @@ void main()
     // flat far-sea pass visible in the encoded video.
     float graze = clamp(1.0 - NoV, 0.0, 1.0);
 
-    // --- 1. PHYSICAL OCEAN WATER OPTICS (Jerlov Coastal II) ---
-    // Coastal Type II water (estuarine/coastal mix like Sagami/Tokyo Bay)
-    // sigma_R ~ 0.115, sigma_G ~ 0.032, sigma_B ~ 0.058 m^-1
-    const vec3 JerlovII_Sigma = vec3(0.115, 0.032, 0.058); 
+    // --- 1. PHYSICAL OCEAN WATER OPTICS (1831 Edo Bay / Sagami Estuary) ---
+    // High marine microbial life (phytoplankton) and suspended river minerals.
+    // Enhanced attenuation in blue and red (chlorophyll + CDOM), yielding a richer green-blue tone.
+    // sigma_R ~ 0.280, sigma_G ~ 0.045, sigma_B ~ 0.115 m^-1
+    const vec3 EdoBay_Sigma = vec3(0.280, 0.045, 0.115); 
 
     float bathyDepth = max(texture(uDepth, vUv).r, 0.05);
     float surfaceHgt = texture(uHeight, vUv).r;
@@ -163,13 +174,13 @@ void main()
 
     // Two-way optical path length for volume transparency
     float pathLen = totalWaterColumn * (1.0 / max(NoV, 0.10) + 1.0 / max(NoL, 0.10));
-    vec3 waterTransmittance = exp(-JerlovII_Sigma * pathLen);
+    vec3 waterTransmittance = exp(-EdoBay_Sigma * pathLen);
 
     // Dynamic sky radiance reflection
     vec3 skyRadiance = uSunColor * mix(vec3(0.25, 0.50, 0.85), vec3(0.42, 0.66, 0.95), graze);
 
-    // Organic Deep Upwelling: Prussian Blue (Hokusai-style)
-    vec3 deepUpwelling = uSunColor * vec3(0.01, 0.12, 0.28) * (0.65 + 0.35 * NoL);
+    // Organic Deep Upwelling: 1831 Hokusai Prussian Blue + Phytoplankton Bloom
+    vec3 deepUpwelling = uSunColor * vec3(0.005, 0.14, 0.22) * (0.65 + 0.35 * NoL);
 
     // Shallow Seabed & Shoreline Sand/Rock Illumination
     vec3 seabedAlbedo = vec3(0.16, 0.14, 0.11);
@@ -191,12 +202,12 @@ void main()
     // --- 2. HIGH-INTENSITY SUN SPECULAR ---
     float roughness = 0.05 + 0.15 * graze;
 
-    // Polarized Fresnel (Fresnel equations, n=1.333 water)
-    float eta = 1.0 / 1.333;
+    // Polarized Fresnel (Fresnel equations, n=1.338 for Edo Bay estuarine seawater, ~32 psu)
+    float eta = 1.0 / 1.338;
     float sinThetaT2 = eta * eta * (1.0 - VoH * VoH);
     float cosThetaT = sqrt(max(0.0, 1.0 - sinThetaT2));
-    float Rs = ((VoH - 1.333 * cosThetaT) / (VoH + 1.333 * cosThetaT));
-    float Rp = ((1.333 * VoH - cosThetaT) / (1.333 * VoH + cosThetaT));
+    float Rs = ((VoH - 1.338 * cosThetaT) / (VoH + 1.338 * cosThetaT));
+    float Rp = ((1.338 * VoH - cosThetaT) / (1.338 * VoH + cosThetaT));
     float fresnelExact = clamp(0.5 * (Rs * Rs + Rp * Rp), 0.02, 0.98);
     vec3 F = mix(vec3(0.02), vec3(1.0), fresnelExact);
 
@@ -217,6 +228,40 @@ void main()
                          * noise(gp * 0.65 - vec2(uTime * 0.04));
     skyReflection *= glitter;
     vec3 color = body + F * skyReflection + directSunSpecular;
+
+    // --- 2.5. PHYSICAL FLUID-ADVECTED FOAM BLENDING ---
+    float foamAmt = texture(uFoam, vUv).r;
+    if (uHasFoamTex == 1 && foamAmt > 0.01) {
+        // Purely physically-driven foam without artificial geometric shapes.
+        // The foam density is strictly determined by the CUDA fluid solver's Jacobian folding mask.
+        // We use the wave's actual horizontal displacement (uDisp) to advect and stretch the foam texture,
+        // mirroring the physical tearing of whitecaps as they ride the moving surface.
+        vec2 fluidDisp = texture(uDisp, vUv).rg;
+        vec2 advectedUV = vWorld.xz + fluidDisp * 1.5; 
+        
+        // Multi-scale sampling of the physical CC0 photographs, scaled to realistic 5-15 meter patches
+        vec2 uvFoamA = mat2( 0.866,  0.500, -0.500,  0.866) * advectedUV * 0.05 + vec2(uTime * 0.005);
+        vec2 uvFoamB = mat2( 0.707, -0.707,  0.707,  0.707) * advectedUV * 0.12 - vec2(uTime * 0.012);
+        
+        float foamOpA = texture(uFoamOpacity, uvFoamA).r;
+        float foamOpB = texture(uFoamOpacity, uvFoamB).r;
+        // Physical foam mask (foamAmt) dictates the existence of foam. The texture provides fibrous micro-detail.
+        float textureOpacity = mix(foamOpA, foamOpB, 0.5);
+        
+        // Crisp contrast for the physical mask to form distinct breaking lips, heavily modulated by the micro-texture.
+        float foamOpacity = smoothstep(0.1, 0.8, foamAmt) * textureOpacity * 2.8;
+        foamOpacity = clamp(foamOpacity, 0.0, 1.0);
+        
+        vec3 foamAlbA = texture(uFoamAlbedo, uvFoamA).rgb;
+        vec3 foamAlbB = texture(uFoamAlbedo, uvFoamB).rgb;
+        vec3 foamAlbedo = mix(foamAlbA, foamAlbB, 0.5);
+        
+        // Physically-correct foam scatter (Hemisphere-like diffuse lighting under sun + sky)
+        vec3 foamScatter = uSunColor * (0.50 + 0.50 * NoL) + vec3(0.25, 0.30, 0.35); // Sun + sky ambient
+        vec3 foamDiffuse = foamAlbedo * foamScatter * 1.5; 
+        
+        color = mix(color, foamDiffuse, foamOpacity);
+    }
 
     // --- 3. SHORELINE DEPTH FADE ---
     // Extended range (0.05 → 2.5 m) gives a gradual alpha fade that eliminates
@@ -243,8 +288,8 @@ void main()
         float hg2 = (1.0 - g2 * g2) / pow(max(0.01, 1.0 + g2 * g2 - 2.0 * g2 * cosTheta), 1.5);
         float hgPhase = clamp(0.7 * hg1 + 0.3 * hg2, 0.0, 3.2);
 
-        // Organic Hokusai-style deep blue-green SSS
-        vec3 sssTransmission = uSunColor * vec3(0.02, 0.25, 0.22) * hgPhase * 0.15;
+        // Organic Hokusai-style deep blue-green SSS (Edo bay nutrient-rich)
+        vec3 sssTransmission = uSunColor * vec3(0.04, 0.28, 0.18) * hgPhase * 0.15;
         color += sssTransmission * crestness * (0.65 + 0.35 * noise(vWorld.xz * 0.8 + vWorld.y * 0.6));
     }
 

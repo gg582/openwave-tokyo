@@ -34,6 +34,10 @@ Running the executable automatically generates four 4K output video files:
 - **Hokusai Prussian Blue**: Subsurface scattering and deep upwelling colors tuned to the *Berliner Blau* palette and pre-industrial marine aerosols.
 - **Sea-Vapor Mist**: Atmospheric scattering simulating the high humidity of the pre-industrial Uraga Channel.
 
+### 4. Physically Accurate Foam & Spray (Whitecaps & Spindrift)
+- **Whitecap Foam Blending**: Actively samples the CUDA-generated Jacobian foam mask in the fragment shader. Blends PBR CC0 Foam textures at multiple scales and rotational frames under a hemisphere-like diffuse scatter lighting model.
+- **Crest Breaking & Spindrift**: Restores the physical Jacobian foam generation multiplier (1.8) and exponential foam injection rate (0.45) in the ocean solver. In violent wave-focusing regions, breaking-wave turbulence is dynamically boosted to trigger hundreds of thousands of ballistic sea spray particles (spindrift) as soon as waves exceed the Stokes steepness limits.
+
 ---
 
 ## Build and Execution

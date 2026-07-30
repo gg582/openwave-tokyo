@@ -79,23 +79,50 @@ void main()
     float slopeGrad = smoothstep(0.40, 0.90, N.y);
     float vegDensity = elevGrad * slopeGrad * (0.4 + 0.6 * fbm);
 
-    vec3 terrainAlbedo = mix(baseFujiSoil, fujiFloraAlbedo, clamp(vegDensity, 0.0, 0.85));
+    // Volcanic Radial Erosion Channels (Sharp gullies carved along volcanic slopes)
+    // Use the normalized vertex normal direction (N.xz) to compute the radial polar angle.
+    // This solves the floating-point precision loss and flickering bug caused by large offset subtractions on vWorld.xz!
+    float polarAngle = atan(N.z, N.x);
+    float erosionFbm = noise(vec2(polarAngle * 45.0, 0.0)) * 0.5
+                     + noise(vec2(polarAngle * 95.0, 0.0)) * 0.25
+                     + noise(vec2(polarAngle * 195.0, 0.0)) * 0.125;
+    float slopeIntensity = smoothstep(0.35, 0.85, 1.0 - N.y);
+    float erosionFactor = erosionFbm * slopeIntensity * smoothstep(1000.0, 3776.0, vElev);
+    
+    // Apply erosion weathering to soil/rock albedo (darkens the gullies)
+    vec3 weatheredSoil = baseFujiSoil * (1.0 - erosionFactor * 0.45);
+    vec3 terrainAlbedo = mix(weatheredSoil, fujiFloraAlbedo, clamp(vegDensity * (1.0 - erosionFactor * 0.3), 0.0, 0.85));
 
     // 4. Lighting
-    float orenNayarDiffuse = NoL; // simplify for now to restore look
+    float orenNayarDiffuse = NoL; 
     vec3 col = terrainAlbedo * (0.35 + 0.65 * orenNayarDiffuse);
 
-    // 5. Snow
-    float ragged = noise(vWorld.xz * 0.001) * 150.0;
-    float snowLine = 2200.0 + ragged;
-    float snow = smoothstep(snowLine - 250.0, snowLine + 250.0, vElev);
-    snow *= smoothstep(0.30, 0.70, N.y);
-    vec3 snowC = vec3(0.92, 0.94, 0.96);
-    col = mix(col, snowC * (0.75 + 0.25 * NoL), snow);
+    // 5. Physically-Guided Wind-Swept Snow Drifts
+    // High-resolution multi-octave noise for jagged, windswept snow margins
+    float snowFbm = noise(vWorld.xz * 0.015) * 0.5
+                  + noise(vWorld.xz * 0.045) * 0.25
+                  + noise(vWorld.xz * 0.125) * 0.125;
+    
+    // NW wind shears the snow coverage across the summit slopes (scale tuned to 35.0 to stay near peak)
+    float windShear = dot(N.xz, vec2(-0.707, 0.707)) * 35.0;
+    
+    // Snow clings to upper valleys/erosion gullies, clears completely on steep rock cliffs (N.y)
+    // Raising base snow line to 2550m ensures lower woodland, subalpine forests, and photographic rock textures are fully visible.
+    float snowN = N.y * (1.3 + 0.2 * snowFbm) + erosionFactor * 0.3;
+    float snowLine = 2550.0 + windShear + snowFbm * 110.0 - erosionFactor * 250.0;
+    float snowAmt = smoothstep(snowLine - 80.0, snowLine + 80.0, vElev) * smoothstep(0.48, 0.78, snowN);
+    snowAmt = clamp(snowAmt, 0.0, 1.0);
+    
+    // Micro wind-blown ripples on the snow surface
+    float snowRipples = noise(vWorld.xz * 0.15) * 0.15 + noise(vWorld.xz * 0.45) * 0.05;
+    vec3 snowC = vec3(0.94, 0.96, 0.98) + snowRipples;
+    col = mix(col, snowC * (0.75 + 0.25 * NoL), snowAmt);
 
-    // 6. Distance Fog
-    float haze = 1.0 - exp(-dist * 0.000018);
-    col = mix(col, uHorizonCol, haze);
+    // 6. Volumetric Exponential Height Fog (Low-altitude sea mist hugs the bay, peaks pierce the clouds)
+    float fogDensity = 0.000028;
+    float heightFalloff = 0.0016; // mist thins out exponentially as elevation climbs
+    float fogHaze = 1.0 - exp(-dist * fogDensity * exp(-max(vWorld.y, 0.0) * heightFalloff));
+    col = mix(col, uHorizonCol, fogHaze);
 
     fragColor = vec4(col, 1.0);
 }

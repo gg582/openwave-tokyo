@@ -249,7 +249,7 @@ int main(int argc, char** argv)
     scfg.n           = ocfg.n;
     scfg.maxEmitters = 8192;
     scfg.perEmitter  = 64;               // 524K max active physical water droplets
-    scfg.breakThresh = 0.85f;            // emit only where the crest actually breaks
+    scfg.breakThresh = 0.52f;            // emit only where the crest actually breaks (lowered from 0.85 to coordinate with the foam model)
     scfg.domain      = ocfg.domain;
     Spray spray;
     spray.init(scfg);

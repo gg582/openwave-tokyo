@@ -25,25 +25,22 @@ void main()
     vSize = aSize;
     gl_Position = uViewProj * vec4(aPosAlpha.xyz, 1.0);
     float dist = max(gl_Position.w, 1.0);
-    // physical diameter projected to pixels; tiny distant bubbles still get
-    // a sub-pixel footprint so clusters read as texture, not a sheet
-    gl_PointSize = clamp(uPointScale * max(aSize, 0.015) / dist, 1.0, uMaxPx);
+    // physical diameter projected to pixels with an artistic telephoto exaggeration boost (18.0x)
+    // and a robust minimum point size of 3.8 pixels so clusters remain visible as physical spray mist.
+    gl_PointSize = clamp(uPointScale * max(aSize, 0.015) * 18.0 / dist, 3.8, uMaxPx);
 
     // screen-space sun azimuth: where the highlight sits on each hollow film
     vec4 sp = uViewProj * vec4(normalize(uSunDir), 0.0);
     vSunXY = normalize(sp.xy + vec2(1e-6, 0.0));
 
-    // slope lighting from the height field (identical reconstruction to
-    // ocean.frag's spectral normal)
+    // Volumetric scattering illumination for flying droplets and rafted bubbles.
+    // Instead of using unstable, high-frequency discrete surface normals that cause 
+    // violent flickering as particles move across grid cells, 
+    // we use a stable elevation-based occlusion model. 
+    // Droplets high in the air catch full sun; droplets low in wave troughs are shadowed.
     vec2 uv = aPosAlpha.xz / uDomain + 0.5;
-    vec2 texel = 1.0 / vec2(textureSize(uHeight, 0));
-    float hL = texture(uHeight, uv - vec2(texel.x, 0.0)).r;
-    float hR = texture(uHeight, uv + vec2(texel.x, 0.0)).r;
-    float hD = texture(uHeight, uv - vec2(0.0, texel.y)).r;
-    float hU = texture(uHeight, uv + vec2(0.0, texel.y)).r;
-    float cell = uDomain / float(textureSize(uHeight, 0).x);
-    vec3 N = normalize(vec3(-(hR - hL) / (2.0 * cell), 1.0,
-                            -(hU - hD) / (2.0 * cell)));
-    float NoL = clamp(dot(N, normalize(uSunDir)), 0.0, 1.0);
-    vLight = 0.30 + 0.70 * NoL;
+    float baseElev = texture(uHeight, uv).r;
+    float altitude = max(aPosAlpha.y - baseElev, 0.0);
+    float exposure = smoothstep(0.0, 3.0, altitude + 0.5); 
+    vLight = 0.35 + 0.65 * exposure;
 }

@@ -513,10 +513,10 @@ __global__ void extract_post_kernel(const float2* __restrict__ specH,
 
     // Turbulent non-uniform Jacobian whitecap threshold.
     // Threshold raised to 0.55 (was 0.35): only genuine mesh folds generate foam,
-    // not gentle choppiness. Sensitivity reduced to 1.0 (was 1.8).
+    // not gentle choppiness. Sensitivity restored to 1.8 (was 1.0).
     const float noiseVal = sinf(i * 0.15f + t * 4.0f) * cosf(j * 0.15f - t * 3.0f);
     const float jacThresh = 0.55f + 0.12f * noiseVal;
-    const float jacF = fminf(fmaxf((jacThresh - J) * 1.0f, 0.0f), 1.0f)
+    const float jacF = fminf(fmaxf((jacThresh - J) * 1.8f, 0.0f), 1.0f)
                      * fminf(0.40f + 0.30f * gust, 1.0f);
 
     // Depth-limited plunging breaker: McCowan criterion (gamma_b = 0.78).
@@ -529,11 +529,15 @@ __global__ void extract_post_kernel(const float2* __restrict__ specH,
 
     // Foam persistence: Monahan & O'Muircheartaigh (1980) exponential decay.
     // τ = 3.85 s → decay = exp(-0.1 / 3.85) ≈ 0.974 per frame.
-    // Injection 0.10 (was 0.45): steady-state coverage ≈ q*0.10/0.026 ≈ 3.8*q.
-    // For q ≈ 0.2 → ~8 % whitecap fraction, matching Monahan U=20 m/s (~5 %).
+    // Injection restored to 0.45 (was 0.10): ensures massive, realistic foam blankets
+    // at violent wave peaks. Dynamic breaking boosting is applied at the rogue focus point.
     const float foamDecay = expf(-simDt / 3.85f);
-    const float q = fmaxf(jacF, brk * brk * 0.6f);
-    foam[e] = fminf(foam[e] * foamDecay + q * 0.10f, 1.0f);
+    float q = fmaxf(jacF, brk * brk * 0.6f);
+    if (env > 1.2f) {
+        const float rogueBoost = 1.0f + 2.5f * (env - 1.0f); // Up to 3.875x boost at wave peak (env ~ 2.15)
+        q = fminf(q * rogueBoost, 1.0f);
+    }
+    foam[e] = fminf(foam[e] * foamDecay + q * 0.45f, 1.0f);
 }
 
 // ---------------------------------------------------------------------------
