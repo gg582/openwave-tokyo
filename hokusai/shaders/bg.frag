@@ -43,28 +43,27 @@ void main()
 
     float elev = ray.y;
 
-    // --- clear morning sky (Rayleigh-style gradient) ---
-    vec3 zenith  = vec3(0.130, 0.270, 0.500);
-    vec3 horizon = vec3(0.680, 0.700, 0.690);
-    // the telephoto frame only spans low elevations, so the blue comes in fast
+    // --- Vibrant Deep Oceanic Sky Gradient ---
+    vec3 zenith  = vec3(0.02, 0.12, 0.48);
+    vec3 horizon = vec3(0.15, 0.35, 0.65);
     vec3 sky = mix(horizon, zenith, smoothstep(-0.02, 0.22, elev));
 
-    // --- sun: forward-scatter glow + disc at the 1831 position ---
+    // --- Sun forward-scatter glow ---
     float sd = max(dot(ray, uSunDir), 0.0);
-    sky += uSunColor * (0.25 * pow(sd, 48.0) + 0.85 * pow(sd, 900.0));
+    sky += uSunColor * (0.20 * pow(sd, 48.0) + 0.80 * pow(sd, 900.0));
 
-    // --- clouds: coverage follows the measured climate norm ---
+    // --- Subtle high atmospheric clouds ---
     float az = atan(ray.z, ray.x);
     float cov = fbm(vec2(az * 2.5 + uTime * 0.004, elev * 10.0));
     float thr0 = 1.0 - uCloud * 0.55;
     float cl = smoothstep(thr0, thr0 + 0.25, cov)
              * smoothstep(0.5, 0.06, elev);
-    vec3 cloudCol = mix(vec3(0.86, 0.86, 0.84), uSunColor, 0.18);
-    sky = mix(sky, cloudCol, cl * 0.6);
+    vec3 cloudCol = mix(vec3(0.70, 0.78, 0.88), uSunColor, 0.15);
+    sky = mix(sky, cloudCol, cl * 0.4);
 
-    // --- marine haze below the horizon ---
+    // Deep ocean horizon fog
     float sea = smoothstep(0.005, -0.02, elev);
-    sky = mix(sky, vec3(0.315, 0.375, 0.420), sea * 0.85);
+    sky = mix(sky, vec3(0.02, 0.10, 0.30), sea * 0.85);
 
     fragColor = vec4(sky, 1.0);
 }

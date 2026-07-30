@@ -23,21 +23,21 @@ void main()
     float NoV = clamp(dot(N, V), 0.0, 1.0);
     float F = 0.02 + 0.98 * pow(1.0 - NoV, 5.0);
     vec3 R = reflect(-V, N);
-    vec3 skyRef = mix(vec3(0.130, 0.270, 0.500),
-                      vec3(0.680, 0.700, 0.690),
+    vec3 skyRef = mix(vec3(0.040, 0.220, 0.650),
+                      vec3(0.150, 0.350, 0.680),
                       pow(clamp(1.0 - R.y, 0.0, 1.0), 2.0));
 
     float NoH = clamp(dot(N, Hv), 0.0, 1.0);
     float glint = pow(NoH, 600.0) * 1.2;
 
     float NoL = max(dot(N, L), 0.0);
-    vec3 deep = vec3(0.008, 0.055, 0.095);
-    vec3 col = deep * (0.6 + 0.4 * NoL) * 1.5 + F * skyRef * 0.75
+    vec3 deep = vec3(0.002, 0.045, 0.280);
+    vec3 col = deep * (0.6 + 0.4 * NoL) * 1.5 + F * skyRef * 0.85
              + uSunColor * glint;
 
     float dist = length(uCamPos - vWorld);
     float haze = 1.0 - exp(-dist * 0.00002);
-    col = mix(col, vec3(0.600, 0.630, 0.645), haze);
+    col = mix(col, vec3(0.050, 0.180, 0.420), haze);
 
     fragColor = vec4(col, 1.0);
 }
