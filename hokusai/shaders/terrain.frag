@@ -77,7 +77,9 @@ void main()
     float lumaDX = dot(rockTexDX, vec3(0.299, 0.587, 0.114));
     float lumaDZ = dot(rockTexDZ, vec3(0.299, 0.587, 0.114));
     vec3 bumpNormal = normalize(vec3(luma - lumaDX, 0.15, luma - lumaDZ));
-    N = normalize(N + bumpNormal * mix(0.24, 0.02, smoothstep(2000.0, 20000.0, dist)));
+    // Completely fade out micro-bump normal mapping in the distance (triplanarFade reaches 0 at 15km)
+    // to prevent sub-pixel normal jitter and triangle flickering on Mt. Fuji (70km away).
+    N = normalize(N + bumpNormal * 0.24 * triplanarFade);
 
     // 3. Fuji Volcanic Soil
     vec3 kurobokudoSoil = rockAlbedo * vec3(0.35, 0.32, 0.28);
@@ -135,13 +137,16 @@ void main()
                   + noise(vWorld.xz * 0.08) * 0.3 * lodFactor
                   + noise(vWorld.xz * 0.24) * 0.2 * lodFactor * lodFactor;
     
-    // NW wind shears the snow coverage across the summit slopes
-    float windShear = dot(N.xz, vec2(-0.707, 0.707)) * 80.0;
+    // NW wind shears the snow coverage across the summit slopes.
+    // Use the smooth unperturbed normal (smoothN) to completely avoid geometry-snapping flickers.
+    vec3 smoothN = normalize(vNormal);
+    if (smoothN.y < 0.0) smoothN = -smoothN;
+    float windShear = dot(smoothN.xz, vec2(-0.707, 0.707)) * 80.0;
     
-    // Snow clings deeply into upper valleys/erosion gullies (erosionFactor) and clears on steep cliffs (N.y)
-    float snowN = N.y * (1.1 + 0.3 * snowFbm) + erosionFactor * 0.45;
+    // Snow clings deeply into upper valleys/erosion gullies (erosionFactor) and clears on steep cliffs (smoothN.y)
+    float snowN = smoothN.y * (1.1 + 0.3 * snowFbm) + erosionFactor * 0.45;
     
-    // Raise the base snow line from 2550m to 3150m to confine snow to the top peak zone.
+    // Raise the base snow line from 3150m to 3150m to confine snow to the top peak zone.
     float snowLine = 3150.0 + windShear + snowFbm * 280.0 - erosionFactor * 350.0;
     // Widened transition width from 120.0 to 250.0 to guarantee buttery-smooth gradients without flickers
     float snowAmt = smoothstep(snowLine - 250.0, snowLine + 250.0, vElev) * smoothstep(0.40, 0.72, snowN);
@@ -149,8 +154,8 @@ void main()
     
     // Micro wind-blown ripples on the snow surface - smoothed with LOD
     float snowRipples = noise(vWorld.xz * 0.06) * 0.15 + noise(vWorld.xz * 0.18) * 0.05 * lodFactor;
-    // Subsurface Scattering (SSS) inside the snow layer - subtle blue/cyan light transmission
-    vec3 snowSSS = vec3(0.08, 0.18, 0.28) * clamp(dot(-N, L), 0.0, 1.0) * (0.35 + 0.65 * snowFbm);
+    // Subsurface Scattering (SSS) inside the snow layer - subtle blue/cyan light transmission (using smoothN to stop popping)
+    vec3 snowSSS = vec3(0.08, 0.18, 0.28) * clamp(dot(-smoothN, L), 0.0, 1.0) * (0.35 + 0.65 * snowFbm);
     vec3 snowC = vec3(0.92, 0.94, 0.96) + snowRipples;
     vec3 snowLighting = snowC * (0.35 + 0.65 * NoL) + snowSSS * uSunColor * 0.40;
     col = mix(col, snowLighting, snowAmt);

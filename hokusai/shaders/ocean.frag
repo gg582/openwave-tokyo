@@ -177,15 +177,14 @@ void main()
     float surfaceHgt = texture(uHeight, vUv).r;
     float totalWaterColumn = max(bathyDepth + max(surfaceHgt, 0.0), 0.01);
 
-    // Two-way optical path length for volume transparency
-    float pathLen = totalWaterColumn * (1.0 / max(NoV, 0.10) + 1.0 / max(NoL, 0.10));
+    // Two-way optical path length for volume transparency (Beer-Lambert attenuation)
+    float pathLen = totalWaterColumn * (1.0 / max(NoV, 0.08) + 1.0 / max(NoL, 0.08));
     vec3 waterTransmittance = exp(-EdoBay_Sigma * pathLen);
 
-    // Dynamic sky radiance reflection
-    vec3 skyRadiance = uSunColor * mix(vec3(0.25, 0.50, 0.85), vec3(0.42, 0.66, 0.95), graze);
-
-    // Organic Deep Upwelling: 1831 Hokusai Prussian Blue + Phytoplankton Bloom
-    vec3 deepUpwelling = uSunColor * vec3(0.005, 0.14, 0.22) * (0.65 + 0.35 * NoL);
+    // Deep volume scattering coefficient (physical radiative transfer approximation)
+    vec3 backscatterCoeff = vec3(0.015, 0.098, 0.145) * 0.35; 
+    vec3 volumeScattering = backscatterCoeff * (1.0 - waterTransmittance) / (EdoBay_Sigma + 1e-4);
+    vec3 deepUpwelling = uSunColor * volumeScattering * (0.50 + 0.50 * NoL);
 
     // Shallow Seabed & Shoreline Sand/Rock Illumination
     vec3 seabedAlbedo = vec3(0.16, 0.14, 0.11);
@@ -218,16 +217,23 @@ void main()
     float fresnelExact = clamp(0.5 * (Rs * Rs + Rp * Rp), 0.02, 0.98);
     vec3 F = mix(vec3(0.02), vec3(1.0), fresnelExact);
 
-    float D = D_GGX(NoH, roughness);
+    // Anisotropic GGX Specular along wind propagation direction to simulate realistic water glint stretching
+    vec3 T_aniso = normalize(vec3(uPropDir.x, 0.0, uPropDir.y)); 
+    vec3 B_aniso = cross(N, T_aniso);
+    float roughX = max(roughness * 0.45, 0.01); // Narrower in wind direction
+    float roughY = max(roughness * 1.45, 0.01); // Wider crosswind
+    float XoH = dot(T_aniso, H);
+    float YoH = dot(B_aniso, H);
+    float d_denom = XoH*XoH / (roughX*roughX) + YoH*YoH / (roughY*roughY) + NoH*NoH;
+    float D_aniso = 1.0 / (3.14159265 * roughX * roughY * d_denom * d_denom + 1e-5);
+
     float G = G_Smith(float(NoV), NoL, roughness);
-    // Cook-Torrance specular: NoL is separated from the luminance scale so
-    // micro-facets facing the sun (NoL ≥ 1e-4) still produce a highlight even
-    // when the macro surface is nearly edge-on. Multiplier 10.0 matches the
-    // visual intensity of direct sunlight on open water (≈10 000 lux → ~10 cd/m²).
     float macroNoL = clamp(dot(normalize(cross(dFdx(vWorld), dFdy(vWorld))), L), 0.0, 1.0);
-    vec3 directSunSpecular = F * D * G / max(4.0 * NoV * NoL, 1e-4)
+    vec3 directSunSpecular = F * D_aniso * G / max(4.0 * NoV * NoL, 1e-4)
                              * uSunColor * max(macroNoL, 0.05) * 10.0;
 
+    // Dynamic sky radiance reflection
+    vec3 skyRadiance = uSunColor * mix(vec3(0.25, 0.50, 0.85), vec3(0.42, 0.66, 0.95), graze);
     vec3 R = reflect(-V, N);
     vec3 skyReflection = mix(skyRadiance * 0.90, skyRadiance * 1.25, pow(clamp(1.0 - R.y, 0.0, 1.0), 2.0));
     vec2 gp = vWorld.xz + vec2(vWorld.y * 0.8, -vWorld.y * 0.6);
@@ -261,17 +267,9 @@ void main()
     vec3 foamAlbB = texture(uFoamAlbedo, uvFoamB).rgb;
     vec3 foamAlbedo = mix(foamAlbA, foamAlbB, 0.5);
     
-    // Micro self-shadowing on the foam layer to create a 3D volumetric thickness look.
-    // Shifts coordinates slightly along the local wave normal and sun direction.
-    vec2 shadowOffset = Ns.xz * 0.015 + L.xz * 0.010;
-    float foamOpAShadow = texture(uFoamOpacity, uvFoamA - shadowOffset).r;
-    float foamOpBShadow = texture(uFoamOpacity, uvFoamB - shadowOffset).r;
-    float textureOpacityShadow = mix(foamOpAShadow, foamOpBShadow, 0.5);
-    
-    // Calculate light occlusion based on the height differences
-    float foamSelfShadow = smoothstep(-0.25, 0.40, textureOpacity - textureOpacityShadow * 0.92);
-    
-    vec3 foamScatter = (uSunColor * (0.45 + 0.55 * NoL) + vec3(0.12, 0.18, 0.25)) * (0.40 + 0.60 * foamSelfShadow); 
+    // Volumetric thickness self-shadowing based on height and light direction (no offset sampling to prevent cloth/moire alignment)
+    float foamSelfShadow = mix(0.40, 1.0, clamp(NoL * (1.0 + 0.6 * textureOpacity), 0.0, 1.0));
+    vec3 foamScatter = (uSunColor * (0.45 + 0.55 * NoL) + vec3(0.12, 0.18, 0.25)) * foamSelfShadow; 
     vec3 foamDiffuse = foamAlbedo * foamScatter * 1.15; 
     
     // Blend foam continuously without hard if-conditionals
@@ -303,9 +301,12 @@ void main()
         float hgPhase = clamp(0.7 * hg1 + 0.3 * hg2, 0.0, 3.2);
 
         // Wave-front Light Leak: Enhanced transillumination through steep wave fronts facing away from the sun
-        float waveFrontLeak = clamp(dot(-Ns, L), 0.0, 1.0) * smoothstep(0.1, 2.5, max(surfaceHgt, 0.0)) * 2.2;
+        // Based on local wave crest thickness estimation
+        float waveThickness = max(0.05, 3.5 - max(surfaceHgt, 0.0));
+        float sssAlign = clamp(dot(-Ns, L), 0.0, 1.0);
+        float waveFrontLeak = exp(-EdoBay_Sigma.g * waveThickness * 1.5) * sssAlign * 3.5;
         // Organic Hokusai-style deep blue-green SSS (Edo bay nutrient-rich)
-        vec3 sssTransmission = uSunColor * vec3(0.04, 0.28, 0.18) * (hgPhase * 0.15 + waveFrontLeak * 0.12);
+        vec3 sssTransmission = uSunColor * vec3(0.02, 0.32, 0.22) * (hgPhase * 0.18 + waveFrontLeak * 0.35);
         color += sssTransmission * crestness * (0.65 + 0.35 * noise(vWorld.xz * 0.8 + vWorld.y * 0.6));
     }
 
