@@ -3,7 +3,7 @@ import struct
 import random
 import os
 
-def generate_wave_sound(physics_log_path, output_wav_path, sample_rate=44100):
+def generate_wave_sound(physics_log_path, output_wav_path, sample_rate=44100, video_path=None):
     metrics = []
     if not os.path.exists(physics_log_path):
         print(f"Error: {physics_log_path} not found.")
@@ -22,7 +22,15 @@ def generate_wave_sound(physics_log_path, output_wav_path, sample_rate=44100):
     total_frames = len(metrics)
     fps = 30
     sim_duration = total_frames / fps
-    total_samples = int(sample_rate * sim_duration)
+    # Determine target duration: use the shorter of simulation duration and the video length (if provided)
+    import subprocess, shlex
+    def get_video_duration(path):
+        cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 {shlex.quote(path)}"
+        result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return float(result.stdout.strip()) if result.returncode == 0 else None
+    video_dur = get_video_duration(video_path) if video_path else None
+    target_dur = sim_duration if video_dur is None else min(sim_duration, video_dur)
+    total_samples = int(sample_rate * target_dur)
     
     # -------------------------------------------------------------------------
     # STATIC OPEN-BAND LPF SYSTEM
@@ -225,4 +233,12 @@ def clamp(val, min_val, max_val):
     return max(min_val, min(val, max_val))
 
 if __name__ == '__main__':
-    generate_wave_sound('data/audio_physics.txt', 'data/hokusai_sea_ambient.wav')
+    import sys
+    physics_log = sys.argv[1] if len(sys.argv) > 1 else 'data/audio_physics.txt'
+    output_wav = sys.argv[2] if len(sys.argv) > 2 else 'data/hokusai_sea_ambient.wav'
+    v_path = None
+    if '--video_path' in sys.argv:
+        idx = sys.argv.index('--video_path')
+        if idx + 1 < len(sys.argv):
+            v_path = sys.argv[idx + 1]
+    generate_wave_sound(physics_log, output_wav, video_path=v_path)
