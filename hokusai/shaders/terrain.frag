@@ -15,6 +15,7 @@ uniform vec3  uCamPos;
 uniform vec3  uSunDir;
 uniform vec3  uSunColor;
 uniform vec3  uHorizonCol;
+uniform float uTime;
 
 float hash(vec2 ip)
 {
@@ -55,18 +56,28 @@ void main()
     float NoL = NoL_raw * 0.5 + 0.5;
     NoL = NoL * NoL; // Squared for realistic contrast transition
 
+    float dist = length(vec3(0.0, 100.0, -350.0) - vWorld);
     // 2. Triplanar Texturing (Faded to static flat projection in the distance to prevent normal jitter clicks)
     vec3 blendWeights = pow(abs(N), vec3(4.0));
     blendWeights /= (blendWeights.x + blendWeights.y + blendWeights.z + 1e-4);
     
     // Smoothly transition to flat Y-mapping beyond 15km where normal interpolation accuracy degrades
-    float dist = length(vec3(0.0, 100.0, -350.0) - vWorld);
     float triplanarFade = clamp(1.0 - (dist / 15000.0), 0.0, 1.0);
     vec3 weights = mix(vec3(0.0, 1.0, 0.0), blendWeights, triplanarFade);
  
     float scale = 0.0005;
     vec3 rockTex = sampleTriplanar(uRockTex, vWorld, weights, scale);
     vec3 rockAlbedo = clamp(rockTex * 0.45, vec3(0.04), vec3(0.40));
+
+    // Dynamic Micro-bump mapping: derive rock normals from texture luminance variation to add high-frequency volcanic scoria relief.
+    float eps = 1.25; // spatial displacement step
+    vec3 rockTexDX = sampleTriplanar(uRockTex, vWorld + vec3(eps, 0.0, 0.0), weights, scale);
+    vec3 rockTexDZ = sampleTriplanar(uRockTex, vWorld + vec3(0.0, 0.0, eps), weights, scale);
+    float luma = dot(rockTex, vec3(0.299, 0.587, 0.114));
+    float lumaDX = dot(rockTexDX, vec3(0.299, 0.587, 0.114));
+    float lumaDZ = dot(rockTexDZ, vec3(0.299, 0.587, 0.114));
+    vec3 bumpNormal = normalize(vec3(luma - lumaDX, 0.15, luma - lumaDZ));
+    N = normalize(N + bumpNormal * mix(0.24, 0.02, smoothstep(2000.0, 20000.0, dist)));
 
     // 3. Fuji Volcanic Soil
     vec3 kurobokudoSoil = rockAlbedo * vec3(0.35, 0.32, 0.28);
@@ -138,8 +149,23 @@ void main()
     
     // Micro wind-blown ripples on the snow surface - smoothed with LOD
     float snowRipples = noise(vWorld.xz * 0.06) * 0.15 + noise(vWorld.xz * 0.18) * 0.05 * lodFactor;
-    vec3 snowC = vec3(0.94, 0.96, 0.98) + snowRipples;
-    col = mix(col, snowC * (0.35 + 0.65 * NoL), snowAmt);
+    // Subsurface Scattering (SSS) inside the snow layer - subtle blue/cyan light transmission
+    vec3 snowSSS = vec3(0.08, 0.18, 0.28) * clamp(dot(-N, L), 0.0, 1.0) * (0.35 + 0.65 * snowFbm);
+    vec3 snowC = vec3(0.92, 0.94, 0.96) + snowRipples;
+    vec3 snowLighting = snowC * (0.35 + 0.65 * NoL) + snowSSS * uSunColor * 0.40;
+    col = mix(col, snowLighting, snowAmt);
+
+    // 6. Wet Shoreline (Wet sand & dark damp rock effect near sea level)
+    // Water level oscillates slightly with uTime to simulate wave washing
+    float waveOsc = sin(uTime * 0.8) * 0.45 + cos(uTime * 1.5) * 0.20;
+    float shorelineFactor = smoothstep(12.0 + waveOsc, -2.0 + waveOsc, vElev);
+    
+    // Wet surface becomes darker and less saturated (absorbing water)
+    col = mix(col, col * vec3(0.38, 0.35, 0.32), shorelineFactor);
+    
+    // Add specular sheen/reflection to wet shoreline
+    float wetSheenShore = shorelineFactor * pow(max(dot(N, normalize(L + V)), 0.0), 32.0) * 0.28;
+    col += uSunColor * wetSheenShore;
 
     // Volumetric Exponential Height Fog (Smoothed max transition at sea level to eliminate C0 derivative flickers)
     float fogDensity = 0.000028;

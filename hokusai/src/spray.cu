@@ -47,7 +47,7 @@ __global__ void scan_atomic_kernel(const float* __restrict__ foam,
     const float slopeZ = (heightField[gyp * n + i] - heightField[gym * n + i]) / dx;
     const float steepness = sqrtf(slopeX * slopeX + slopeZ * slopeZ);
 
-    if (foam[j * n + i] > thr && steepness > 0.40f) {
+    if (foam[j * n + i] > thr && steepness > 0.22f) {
         const int slot = atomicAdd(counter, 1);
         list[slot] = j * n + i;
     }
@@ -81,7 +81,7 @@ __global__ void scan_shuffle_kernel(const float* __restrict__ foam,
         const float slopeZ = (heightField[gyp * n + i] - heightField[gym * n + i]) / dx;
         const float steepness = sqrtf(slopeX * slopeX + slopeZ * slopeZ);
         
-        pred = (foam[cell] > thr && steepness > 0.40f);
+        pred = (foam[cell] > thr && steepness > 0.22f);
     }
     const unsigned mask = __ballot_sync(0xffffffffu, pred);
     if (mask == 0u) return;
@@ -134,8 +134,10 @@ __global__ void spray_update_kernel(float4* __restrict__ parts,
         const int e = i / perEmitter;
         if (e < nEmit) {
             const int cell = emitters[e];
-            const float gx = (float)(cell % n);
-            const float gy = (float)(cell / n);
+            const int cx = cell % n;
+            const int cy = cell / n;
+            const float gx = (float)cx;
+            const float gy = (float)cy;
             const float wx = (gx / (float)(n - 1) - 0.5f) * domain;
             const float wz = (gy / (float)(n - 1) - 0.5f) * domain;
 
@@ -152,9 +154,22 @@ __global__ void spray_update_kernel(float4* __restrict__ parts,
             const float u2 = fmaxf(shash(s1 * 13u + 47u), 1e-6f);
             const float Z = sqrtf(-2.0f * logf(u1)) * cosf(6.2831853f * u2);
 
+            // Compute local physical wave normal (gradient of height field) at the emitter location
+            const int gxp = min(cx + 1, n - 1);
+            const int gxm = max(cx - 1, 0);
+            const int gyp = min(cy + 1, n - 1);
+            const int gym = max(cy - 1, 0);
+            const float dx = 2.0f * domain / (float)n;
+            const float slopeX = (heightField[cy * n + gxp] - heightField[cy * n + gxm]) / dx;
+            const float slopeZ = (heightField[gyp * n + cx] - heightField[gym * n + cx]) / dx;
+            float3 waveNorm = make_float3(-slopeX, 1.5f, -slopeZ);
+            float len = sqrtf(waveNorm.x*waveNorm.x + waveNorm.y*waveNorm.y + waveNorm.z*waveNorm.z);
+            if (len > 1e-4f) { waveNorm.x /= len; waveNorm.y /= len; waveNorm.z /= len; }
+
+            const float surf = heightField[cell] + tide;
+
             if (r1 < 0.55f) {
                 // Surface bubble raft scale: log-normal distributed centered around 1.2mm
-                const float surf = heightField[cell] + tide;
                 const float diam = fminf(fmaxf(expf(logf(0.0012f) + 0.45f * Z), 0.0004f), 0.004f);
                 parts[i] = make_float4(wx + (r2 - 0.5f) * 6.0f, surf + 0.02f,
                                        wz + (r4 - 0.5f) * 6.0f, 0.0f);
@@ -166,27 +181,33 @@ __global__ void spray_update_kernel(float4* __restrict__ parts,
                 const float diam = fminf(fmaxf(expf(logf(0.0006f) + 0.35f * Z), 0.0001f), 0.002f);
                 
                 // Physical chemistry parameters: Temperature T = 11.1 C, Salinity S = 25.0 PSU (Uraga brackish tide)
-                // 1. Sharqawy et al. (2010) Surface Tension of Seawater
-                const float T = 11.1f;
-                const float S = 25.0f;
-                const float sigma_pure = 0.07564f - 1.385e-4f * T - 3.559e-7f * T * T;
-                const float sigma_w = sigma_pure * (1.0f + 3.766e-4f * S); // ~ 0.0747 N/m
-                
-                // 2. Seawater density at 11.1C, 25.0 PSU: ~ 1018.6 kg/m3
+                const float T_water = 11.1f;
+                const float S_water = 25.0f;
+                const float sigma_pure = 0.07564f - 1.385e-4f * T_water - 3.559e-7f * T_water * T_water;
+                const float sigma_w = sigma_pure * (1.0f + 3.766e-4f * S_water); // ~ 0.0747 N/m
                 const float rho_w = 1018.6f;
                 
                 // Veron (2015) bubble bursting jet droplet ejection velocity
                 const float jetVel = 0.42f * sqrtf(sigma_w / (rho_w * fmaxf(diam, 0.0001f)));
                 
-                // 3. Wind stress spume ejection with tidal Doppler current shift (Sagami Bay current ~ 0.85 m/s SSE)
+                // Wind stress spume ejection with tidal Doppler current shift
                 const float v0 = phaseSpeed * (0.8f + 0.3f * r1);
+
+                // Physical ejection vector: combination of localized wave face slope normal and general propagation wind shear
+                float3 ejectDir = make_float3(
+                    waveNorm.x * 0.75f + pdir.x * 0.25f,
+                    waveNorm.y * 0.85f + 0.15f,
+                    waveNorm.z * 0.75f + pdir.z * 0.25f
+                );
+                float elen = sqrtf(ejectDir.x*ejectDir.x + ejectDir.y*ejectDir.y + ejectDir.z*ejectDir.z);
+                if (elen > 1e-4f) { ejectDir.x /= elen; ejectDir.y /= elen; ejectDir.z /= elen; }
                 
-                vel[i] = make_float4(pdir.x * v0 + (r2 - 0.5f) * 1.5f,
-                                     jetVel + 0.5f * r3 * phaseSpeed * 0.25f,
-                                     pdir.z * v0 + (r4 - 0.5f) * 1.5f,
+                vel[i] = make_float4(ejectDir.x * (jetVel + v0) + (r2 - 0.5f) * 0.5f,
+                                     ejectDir.y * (jetVel + v0 * 0.2f) + 0.15f * r3 * phaseSpeed,
+                                     ejectDir.z * (jetVel + v0) + (r4 - 0.5f) * 0.5f,
                                      diam);
-                parts[i] = make_float4(wx + (r2 - 0.5f) * 4.0f, tide + 1.0f,
-                                       wz + (r4 - 0.5f) * 4.0f, 0.0f);
+                parts[i] = make_float4(wx + (r2 - 0.5f) * 3.0f, surf + 0.05f,
+                                       wz + (r4 - 0.5f) * 3.0f, 0.0f);
                 age[i] = 0.0f;
                 state[i] = 1;
             }

@@ -132,13 +132,18 @@ void main()
         vec2 grad = vec2(noise(cp + 0.1) - n, noise(cp + vec2(0, 0.1)) - n) * 5.0;
         
         // Procedural micro-ripple normal (creates the shimmering silver wind-glitter across the bay)
-        vec2 ripUv = vWorld.xz * 2.2 - uPropDir * uTime * 1.85;
-        float ripA = sin(ripUv.x * 3.5 + ripUv.y * 1.5) * 0.5 + sin(ripUv.x * 7.5 - ripUv.y * 3.5) * 0.25;
-        float ripB = cos(ripUv.x * 11.5 - ripUv.y * 5.5) * 0.15 + sin(ripUv.y * 16.5) * 0.10;
-        vec2 microGrad = vec2(ripA + ripB * 0.5, ripB - ripA * 0.3) * 0.22;
+        // Replaced simple sine/cosine grids with an irrational rotation multi-frequency detail set
+        // to avoid periodic moire artifacts (cloth-like pattern) while capturing high-frequency wind ripples.
+        vec2 ripUv1 = mat2( 0.940,  0.342, -0.342,  0.940) * vWorld.xz * 2.6 - uPropDir * uTime * 2.1;
+        vec2 ripUv2 = mat2( 0.574, -0.819,  0.819,  0.574) * vWorld.xz * 5.8 - uPropDir * uTime * 3.4;
+        vec2 ripUv3 = mat2(-0.174,  0.985, -0.985, -0.174) * vWorld.xz * 11.2 - uPropDir * uTime * 5.1;
+        
+        float ripA = noise(ripUv1) * 0.45 + noise(ripUv2) * 0.25;
+        float ripB = noise(ripUv3) * 0.12 + sin(ripUv1.x * 1.5 + ripUv2.y * 0.8) * 0.06;
+        vec2 microGrad = vec2(ripA - ripB * 0.4, ripB + ripA * 0.2) * 0.35;
         
         float mnStrength = mix(0.40, 0.15, smoothstep(20.0, 150.0, camDist2D));
-        float ripStrength = mix(0.18, 0.04, smoothstep(40.0, 600.0, camDist2D));
+        float ripStrength = mix(0.24, 0.06, smoothstep(40.0, 600.0, camDist2D));
         
         N = normalize(N + vec3(mnA.x + 0.7 * mnB.x + grad.x, 0.0,
                                mnA.z + 0.7 * mnB.z + grad.y) * mnStrength
@@ -200,7 +205,9 @@ void main()
     body = mix(body, body * waterTransmittance, 0.8);
 
     // --- 2. HIGH-INTENSITY SUN SPECULAR ---
-    float roughness = 0.05 + 0.15 * graze;
+    // Crest-dependent Roughness: Crests are rougher due to wind and micro-breaking, while troughs are glass-like.
+    float crestFactor = smoothstep(0.4, 3.5, max(surfaceHgt, 0.0));
+    float roughness = mix(0.04, 0.18, crestFactor) + 0.12 * graze;
 
     // Polarized Fresnel (Fresnel equations, n=1.338 for Edo Bay estuarine seawater, ~32 psu)
     float eta = 1.0 / 1.338;
@@ -236,7 +243,9 @@ void main()
     float activeFoam = smoothstep(0.005, 0.06, foamAmt);
     
     vec2 fluidDisp = texture(uDisp, vUv).rg;
-    vec2 advectedUV = vWorld.xz + fluidDisp * 1.5; 
+    // Turbulence & wave slope-driven foam stretching along gravity/slope normal to simulate shearing
+    vec2 slopeStretch = Ns.xz * (0.35 * smoothstep(0.0, 1.5, length(Ns.xz)));
+    vec2 advectedUV = vWorld.xz + fluidDisp * 1.5 + slopeStretch * 4.5; 
     
     vec2 uvFoamA = mat2( 0.866,  0.500, -0.500,  0.866) * advectedUV * 0.05 + vec2(uTime * 0.005);
     vec2 uvFoamB = mat2( 0.707, -0.707,  0.707,  0.707) * advectedUV * 0.12 - vec2(uTime * 0.012);
@@ -283,8 +292,10 @@ void main()
         float hg2 = (1.0 - g2 * g2) / pow(max(0.01, 1.0 + g2 * g2 - 2.0 * g2 * cosTheta), 1.5);
         float hgPhase = clamp(0.7 * hg1 + 0.3 * hg2, 0.0, 3.2);
 
+        // Wave-front Light Leak: Enhanced transillumination through steep wave fronts facing away from the sun
+        float waveFrontLeak = clamp(dot(-Ns, L), 0.0, 1.0) * smoothstep(0.1, 2.5, max(surfaceHgt, 0.0)) * 2.2;
         // Organic Hokusai-style deep blue-green SSS (Edo bay nutrient-rich)
-        vec3 sssTransmission = uSunColor * vec3(0.04, 0.28, 0.18) * hgPhase * 0.15;
+        vec3 sssTransmission = uSunColor * vec3(0.04, 0.28, 0.18) * (hgPhase * 0.15 + waveFrontLeak * 0.12);
         color += sssTransmission * crestness * (0.65 + 0.35 * noise(vWorld.xz * 0.8 + vWorld.y * 0.6));
     }
 
@@ -293,7 +304,7 @@ void main()
     // read as one continuous body instead of stacked bands
     vec3 horizonFog = vec3(0.42, 0.46, 0.52) * uSunColor * 0.7875;
     float cameraDist = length(uCamPos - vWorld);
-    float atmosphericHaze = 1.0 - exp(-cameraDist * 0.00015);
+    float atmosphericHaze = 1.0 - exp(-cameraDist * 0.00028);
     color = mix(color, horizonFog, atmosphericHaze);
 
     fragColor = vec4(color, 1.0);

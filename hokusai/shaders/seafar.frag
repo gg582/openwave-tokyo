@@ -63,7 +63,7 @@ void main()
     // background sky's below-horizon fog tone (one unified sea)
     vec3 horizonFog = vec3(0.42, 0.46, 0.52) * uSunColor * 0.7875;
     float cameraDist = length(uCamPos - vWorld);
-    float atmosphericHaze = 1.0 - exp(-cameraDist * 0.00015);
+    float atmosphericHaze = 1.0 - exp(-cameraDist * 0.00028);
     color = mix(color, horizonFog, atmosphericHaze);
 
     fragColor = vec4(color, 1.0);

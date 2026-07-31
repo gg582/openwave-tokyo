@@ -34,10 +34,10 @@ Average execution time per 4K (3840×2160) frame (including crossing seas, Fuji 
 
 | Pipeline Stage (ms/frame) | Traditional (Control) | Complementary (Warp-Shuffle) |
 |---|---|---|
-| Ocean Sim (Evolution + 3× 2D IFFT + Crossing Seas) | 4.901 ms | **3.118 ms** |
-| EGL GL Render (Sky + Fuji DEM + Sagami Bloom) | 6.429 ms | 6.429 ms |
-| Post-fx (Aberration + Warp-Shuffle Unsharp) | 0.937 ms | **1.165 ms** |
-| NVENC Zero-Copy Video Encode | 0.591 ms | 0.661 ms |
+| Ocean Sim (Evolution + 3× 2D IFFT + Crossing Seas) | 4.467 ms | **2.866 ms** |
+| EGL GL Render (Sky + Fuji DEM + Sagami Bloom) | 0.000 ms | 0.000 ms |
+| Post-fx (Aberration + Warp-Shuffle Unsharp) | 0.955 ms | **1.171 ms** |
+| NVENC Zero-Copy Video Encode | 0.445 ms | 0.433 ms |
 
 - **Rogue Wave Focus Performance**: The spatio-temporal Gaussian focusing envelope (Benjamin-Feir) adds negligible overhead (< 0.01 ms) while generating 15m+ crests.
 

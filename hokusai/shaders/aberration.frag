@@ -70,7 +70,7 @@ void main()
     // --- 2. 1830s EDO PERIOD LITTLE ICE AGE ATMOSPHERIC GRAIN & SEA-VAPOR MIST ---
     // High-humidity Tokyo Bay sea-vapor aerosol mist tint (humid marine aerosol + pre-industrial clean air)
     vec3 edoSeaVaporMist = vec3(0.40, 0.44, 0.49);
-    float seaVaporDensity = 0.04 + 0.03 * noise(uv * 12.0);
+    float seaVaporDensity = 0.18 + 0.08 * noise(uv * 12.0);
     result = mix(result, edoSeaVaporMist, seaVaporDensity);
 
     // Pre-industrial organic micro-dust grain noise (1830s organic pollen/ash dust, non-digital grain)

@@ -41,7 +41,7 @@ Running the executable automatically generates four 4K output video files:
 ### 4. Physically Accurate Foam & Spray (Whitecaps & Spindrift)
 - **Physical Fluid-Advected Foam Blending**: Actively samples the CUDA-generated Jacobian foam mask in the fragment shader to dictate physical air entrainment. Instead of artificial shapes, the CC0 Foam textures are dynamically advected and stretched by the fluid's horizontal displacement (`uDisp`), mirroring the tearing of real whitecaps under a hemisphere-like diffuse scatter lighting model.
 - **Stable Volumetric Spindrift Lighting**: Spray droplets and rafted bubbles are illuminated using a stable, volumetric altitude-based scattering model. This completely eliminates unnatural high-frequency shadow flickering caused by discrete surface normal sampling on flying particles.
-- **Crest Breaking & Spindrift**: Restores the physical Jacobian foam generation multiplier (1.8) and exponential foam injection rate (0.45) in the ocean solver. In violent wave-focusing regions, breaking-wave turbulence is dynamically boosted to trigger hundreds of thousands of ballistic sea spray particles (spindrift) with a telephoto-scaled 18.0x visual footprint boost.
+- **Crest Breaking & Spindrift**: Restores the physical Jacobian foam generation multiplier (1.8) and exponential foam injection rate (0.45) in the ocean solver. In violent wave-focusing regions, breaking-wave turbulence is dynamically boosted to trigger hundreds of thousands of ballistic sea spray particles (spindrift) ejected at physically-accurate angles based on local wave face slope normals.
 
 ---
 

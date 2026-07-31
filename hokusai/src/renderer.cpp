@@ -939,6 +939,7 @@ void Renderer::renderFrame(float time, float tide, const float4* sprayPos,
         glUniform3f(glGetUniformLocation(progTerrain_, "uHorizonCol"),
                     hzR, hzG, hzB);
         glUniform1f(glGetUniformLocation(progTerrain_, "uTide"), 0.0f);
+        glUniform1f(glGetUniformLocation(progTerrain_, "uTime"), time);
         bindTex(0, texRock_, glGetUniformLocation(progTerrain_, "uRockTex"), 0);
         glBindVertexArray(vaoTerrain_);
         glDrawElements(GL_TRIANGLES, terrainIdxCount_, GL_UNSIGNED_INT,

@@ -32,10 +32,9 @@ void main()
     vEccentricity = E;
     gl_Position = uViewProj * vec4(aPosAlpha.xyz, 1.0);
     float dist = max(gl_Position.w, 1.0);
-    // Physical diameter projected to pixels with a realistic scaling (0.6x)
-    // and a very low minimum size of 0.8 pixels. This blends discrete 'balls'
-    // into a soft, continuous spindrift mist.
-    gl_PointSize = clamp(uPointScale * max(aSize, 0.004) * 0.6 / dist, 0.8, uMaxPx);
+    // Physical diameter projected to pixels with a realistic 1.0x scaling
+    // and a standard minimum size of 1.0 pixel to restore the original baseline.
+    gl_PointSize = clamp(uPointScale * max(aSize, 0.015) / dist, 1.0, uMaxPx);
     
     // Soften alpha for small particles to create a smooth volumetric mist effect
     vAlpha = rawAlpha * clamp(gl_PointSize / 3.0, 0.05, 1.0);
