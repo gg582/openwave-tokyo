@@ -101,6 +101,26 @@ void main()
     vec3 dryFoamColor = mix(skyAmb, directMieScatter, 0.75);
     vec3 col = mix(sssOceanColor, dryFoamColor, wetFoamTransmittance);
 
+    // --- 6. SPHERICAL MICRO-LENS REFRACTION & CHROMATIC DISPERSION ---
+    // Recreates the prismatic rainbow sparkle edge on water droplets by simulating channel-split refraction
+    vec3 V_dir = normalize(vec3(c, 1.0)); // Local view direction
+    float z_drop = sqrt(max(0.0, 1.0 - dist * dist));
+    vec3 dropNorm = normalize(vec3(deformedC, z_drop)); // Micro-sphere normal
+    
+    // Water refractive indices per R/G/B channel to trigger dispersion (rainbow fringing)
+    vec3 refractionEta = vec3(1.330, 1.333, 1.337); 
+    vec3 refractDirR = refract(-V_dir, dropNorm, 1.0 / refractionEta.r);
+    vec3 refractDirG = refract(-V_dir, dropNorm, 1.0 / refractionEta.g);
+    vec3 refractDirB = refract(-V_dir, dropNorm, 1.0 / refractionEta.b);
+    
+    float dispersionR = pow(max(dot(refractDirR, normalize(vec3(vSunXY, 0.5))), 0.0), 32.0);
+    float dispersionG = pow(max(dot(refractDirG, normalize(vec3(vSunXY, 0.5))), 0.0), 32.0);
+    float dispersionB = pow(max(dot(refractDirB, normalize(vec3(vSunXY, 0.5))), 0.0), 32.0);
+    
+    // Add refractive glint back to the color spectrum
+    vec3 rainbowSparkle = uSunColor * vec3(dispersionR, dispersionG, dispersionB) * 1.8 * vLight;
+    col += rainbowSparkle * isMist; // Apply sparkling highlights to flying spume droplets
+
     // Fade out smoothly towards the aerodynamically torn boundary
     float alphaFade = smoothstep(0.65, 0.15, radialEdge);
     float a = alphaFade * (0.35 + 0.65 * opacityMap) * vAlpha;

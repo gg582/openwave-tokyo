@@ -261,8 +261,18 @@ void main()
     vec3 foamAlbB = texture(uFoamAlbedo, uvFoamB).rgb;
     vec3 foamAlbedo = mix(foamAlbA, foamAlbB, 0.5);
     
-    vec3 foamScatter = uSunColor * (0.45 + 0.55 * NoL) + vec3(0.20, 0.28, 0.35); // Sun + sky ambient
-    vec3 foamDiffuse = foamAlbedo * foamScatter * 1.02; 
+    // Micro self-shadowing on the foam layer to create a 3D volumetric thickness look.
+    // Shifts coordinates slightly along the local wave normal and sun direction.
+    vec2 shadowOffset = Ns.xz * 0.015 + L.xz * 0.010;
+    float foamOpAShadow = texture(uFoamOpacity, uvFoamA - shadowOffset).r;
+    float foamOpBShadow = texture(uFoamOpacity, uvFoamB - shadowOffset).r;
+    float textureOpacityShadow = mix(foamOpAShadow, foamOpBShadow, 0.5);
+    
+    // Calculate light occlusion based on the height differences
+    float foamSelfShadow = smoothstep(-0.25, 0.40, textureOpacity - textureOpacityShadow * 0.92);
+    
+    vec3 foamScatter = (uSunColor * (0.45 + 0.55 * NoL) + vec3(0.12, 0.18, 0.25)) * (0.40 + 0.60 * foamSelfShadow); 
+    vec3 foamDiffuse = foamAlbedo * foamScatter * 1.15; 
     
     // Blend foam continuously without hard if-conditionals
     color = mix(color, foamDiffuse, foamOpacity * 0.85 * float(uHasFoamTex));
