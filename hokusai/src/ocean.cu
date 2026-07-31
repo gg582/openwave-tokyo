@@ -514,8 +514,8 @@ __global__ void extract_post_kernel(const float2* __restrict__ specH,
     // Turbulent non-uniform Jacobian whitecap threshold.
     // Threshold raised to 0.55 (was 0.35): only genuine mesh folds generate foam,
     // not gentle choppiness. Sensitivity restored to 1.8 (was 1.0).
-    const float noiseVal = sinf(i * 0.15f + t * 4.0f) * cosf(j * 0.15f - t * 3.0f);
-    const float jacThresh = 0.55f + 0.12f * noiseVal;
+    // Constant threshold to prevent periodic grid-weave and leopard artifacts from seeding in the simulator.
+    const float jacThresh = 0.55f;
     const float jacF = fminf(fmaxf((jacThresh - J) * 1.8f, 0.0f), 1.0f)
                      * fminf(0.40f + 0.30f * gust, 1.0f);
 

@@ -35,17 +35,13 @@ void main()
     float NoH = clamp(dot(N, Hv), 0.0, 1.0);
     float graze = clamp(1.0 - NoV, 0.0, 1.0);
 
-    // Identical turbid Tokyo Bay water body color as ocean.frag (Beer-Lambert model)
+    // Identical turbid Tokyo Bay water body color as ocean.frag (Prussian Blue + Phytoplankton Bloom)
     vec3 skyRadRaw = mix(uSunColor * vec3(0.12, 0.28, 0.45), uSunColor * vec3(0.22, 0.42, 0.58), graze);
     float skyLum = dot(skyRadRaw, vec3(0.2126, 0.7152, 0.0722));
     vec3 skyRadiance = mix(skyRadRaw, vec3(skyLum), 0.30);
     
-    const vec3 EdoBay_Sigma = vec3(0.280, 0.045, 0.115);
-    float pathLen = 45.0 * (1.0 / max(NoV, 0.08) + 1.0 / max(NoL, 0.08));
-    vec3 waterTransmittance = exp(-EdoBay_Sigma * pathLen);
-    vec3 backscatterCoeff = vec3(0.015, 0.098, 0.145) * 0.35; 
-    vec3 volumeScattering = backscatterCoeff * (1.0 - waterTransmittance) / (EdoBay_Sigma + 1e-4);
-    vec3 deepUpwelling = uSunColor * volumeScattering * (0.50 + 0.50 * NoL);
+    // 1830s Edo-mae Tokyo Bay Prussian Blue (ai-iro) pigment alignment
+    vec3 deepUpwelling = uSunColor * vec3(0.012, 0.11, 0.24) * (0.65 + 0.35 * NoL);
     vec3 body = deepUpwelling + skyRadiance * 0.08;
 
     // Physical Fresnel sky reflection (matching ocean.frag F0 = 0.02),
@@ -53,9 +49,13 @@ void main()
     float F = 0.02 + 0.98 * pow(1.0 - NoV, 5.0);
     vec3 R = reflect(-V, N);
     vec3 skyReflection = mix(skyRadiance * 0.8, skyRadiance * 1.1, pow(clamp(1.0 - R.y, 0.0, 1.0), 2.0));
-    float glitter = 0.55 + 0.75 * sfr_noise(vWorld.xz * 0.35 + vec2(uTime * 0.06, -uTime * 0.04))
-                         * sfr_noise(vWorld.xz * 0.08 - vec2(uTime * 0.02));
-    skyReflection *= 0.55 * glitter;
+    
+    // Smooth out distant glitter on the far plane to prevent dot-like noise popping
+    float dist = length(uCamPos - vWorld);
+    float glitterFade = clamp(1.0 - (dist / 1000.0), 0.0, 1.0);
+    float glitter = 1.0 + (0.75 * sfr_noise(vWorld.xz * 0.35 + vec2(uTime * 0.06, -uTime * 0.04))
+                         * sfr_noise(vWorld.xz * 0.08 - vec2(uTime * 0.02)) - 0.20) * 0.50 * glitterFade;
+    skyReflection *= glitter;
 
     // Anisotropic spec mapping for far plane wind-aligned glints
     float roughX = 0.12; 

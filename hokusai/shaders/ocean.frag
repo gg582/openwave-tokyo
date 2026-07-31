@@ -134,20 +134,26 @@ void main()
         // Procedural micro-ripple normal (creates the shimmering silver wind-glitter across the bay)
         // Replaced simple sine/cosine grids with an irrational rotation multi-frequency detail set
         // to avoid periodic moire artifacts (cloth-like pattern) while capturing high-frequency wind ripples.
+        // Camera-distance dependent MIP LOD to kill high-frequency sub-pixel speckles.
+        float ripFade1 = clamp(1.0 - (camDist2D / 120.0), 0.0, 1.0); 
+        float ripFade2 = clamp(1.0 - (camDist2D / 350.0), 0.0, 1.0); 
+        
         vec2 ripUv1 = mat2( 0.940,  0.342, -0.342,  0.940) * vWorld.xz * 2.6 - uPropDir * uTime * 2.1;
         vec2 ripUv2 = mat2( 0.574, -0.819,  0.819,  0.574) * vWorld.xz * 5.8 - uPropDir * uTime * 3.4;
         vec2 ripUv3 = mat2(-0.174,  0.985, -0.985, -0.174) * vWorld.xz * 11.2 - uPropDir * uTime * 5.1;
         
-        float ripA = noise(ripUv1) * 0.45 + noise(ripUv2) * 0.25;
-        float ripB = noise(ripUv3) * 0.12 + sin(ripUv1.x * 1.5 + ripUv2.y * 0.8) * 0.06;
+        float ripA = noise(ripUv1) * 0.45 + noise(ripUv2) * 0.25 * ripFade1;
+        float ripB = noise(ripUv3) * 0.12 * ripFade2 + sin(ripUv1.x * 1.5 + ripUv2.y * 0.8) * 0.06 * ripFade1;
         vec2 microGrad = vec2(ripA - ripB * 0.4, ripB + ripA * 0.2) * 0.35;
         
-        float mnStrength = mix(0.40, 0.15, smoothstep(20.0, 150.0, camDist2D));
-        float ripStrength = mix(0.24, 0.06, smoothstep(40.0, 600.0, camDist2D));
+        // Distance-based LOD blend: Rich details up close to prevent clay-like look,
+        // fading gently toward zero at far ranges to completely suppress sub-pixel Moire.
+        float mnStrength = mix(0.28, 0.0, smoothstep(15.0, 95.0, camDist2D));
+        float ripStrength = mix(0.12, 0.0, smoothstep(15.0, 95.0, camDist2D));
         
         N = normalize(N + vec3(mnA.x + 0.7 * mnB.x + grad.x, 0.0,
                                mnA.z + 0.7 * mnB.z + grad.y) * mnStrength
-                        + vec3(microGrad.x, 0.0, microGrad.y) * ripStrength);
+                         + vec3(microGrad.x, 0.0, microGrad.y) * ripStrength);
     }
 
     vec3 V = normalize(uCamPos - vWorld);
@@ -168,23 +174,22 @@ void main()
     float graze = clamp(1.0 - NoV, 0.0, 1.0);
 
     // --- 1. PHYSICAL OCEAN WATER OPTICS (1831 Edo Bay / Sagami Estuary) ---
-    // High marine microbial life (phytoplankton) and suspended river minerals.
-    // Enhanced attenuation in blue and red (chlorophyll + CDOM), yielding a richer green-blue tone.
-    // sigma_R ~ 0.280, sigma_G ~ 0.045, sigma_B ~ 0.115 m^-1
-    const vec3 EdoBay_Sigma = vec3(0.280, 0.045, 0.115); 
+    // Reconstructed using Jerlov Coastal Water Type 3 (optical baseline of pre-industrial estuaries).
+    // Chlorophyll-a and CDOM concentrations correspond to oligotrophic/mesotrophic healthy baseline before 20th-century eutrophication.
+    // Attenuation coefficients: Red = 0.280, Green = 0.060, Blue = 0.140 m^-1
+    const vec3 EdoBay_Sigma = vec3(0.280, 0.060, 0.140); 
 
     float bathyDepth = max(texture(uDepth, vUv).r, 0.05);
     float surfaceHgt = texture(uHeight, vUv).r;
     float totalWaterColumn = max(bathyDepth + max(surfaceHgt, 0.0), 0.01);
 
-    // Two-way optical path length for volume transparency (Beer-Lambert attenuation)
+    // Deep Volume Transparency & Absorption (Beer-Lambert attenuation)
     float pathLen = totalWaterColumn * (1.0 / max(NoV, 0.08) + 1.0 / max(NoL, 0.08));
     vec3 waterTransmittance = exp(-EdoBay_Sigma * pathLen);
 
-    // Deep volume scattering coefficient (physical radiative transfer approximation)
-    vec3 backscatterCoeff = vec3(0.015, 0.098, 0.145) * 0.35; 
-    vec3 volumeScattering = backscatterCoeff * (1.0 - waterTransmittance) / (EdoBay_Sigma + 1e-4);
-    vec3 deepUpwelling = uSunColor * volumeScattering * (0.50 + 0.50 * NoL);
+    // 1830s Edo-mae Tokyo Bay: Productive estuary but relatively clear and healthy (Secchi depth ~5-7m).
+    // Reconstructs the water color based on historical waste recycling records and Hokusai's Prussian Blue (ai-iro) pigment.
+    vec3 deepUpwelling = uSunColor * vec3(0.012, 0.11, 0.24) * (0.65 + 0.35 * NoL);
 
     // Shallow Seabed & Shoreline Sand/Rock Illumination
     vec3 seabedAlbedo = vec3(0.16, 0.14, 0.11);
@@ -199,9 +204,9 @@ void main()
     seabedIllum += uSunColor * pow(NoH, 32.0) * 0.35 * wetSheen;
 
     // Physical Seabed Transparency
-    float seabedVisibility = exp(-0.5 * totalWaterColumn) * (1.0 - graze);
+    float seabedVisibility = exp(-0.4 * totalWaterColumn) * (1.0 - graze);
     vec3 body = mix(deepUpwelling, seabedIllum, seabedVisibility);
-    body = mix(body, body * waterTransmittance, 0.8);
+    body = mix(body, body * waterTransmittance, 0.75);
 
     // --- 2. HIGH-INTENSITY SUN SPECULAR ---
     // Crest-dependent Roughness: Crests are rougher due to wind and micro-breaking, while troughs are glass-like.
@@ -237,43 +242,40 @@ void main()
     vec3 R = reflect(-V, N);
     vec3 skyReflection = mix(skyRadiance * 0.90, skyRadiance * 1.25, pow(clamp(1.0 - R.y, 0.0, 1.0), 2.0));
     vec2 gp = vWorld.xz + vec2(vWorld.y * 0.8, -vWorld.y * 0.6);
-    float glitter = 0.70 + 0.85 * noise(gp * 2.5 + vec2(uTime * 0.12, -uTime * 0.08))
-                         * noise(gp * 0.65 - vec2(uTime * 0.04));
+    // Smooth out specular reflection glitter at distance to avoid sub-pixel speckles
+    // Uses single soft noise modulation to prevent grid/cloth Moire artifacts from dual-noise multiplication
+    float glitterFade = clamp(1.0 - (camDist2D / 250.0), 0.0, 1.0);
+    float glitter = 1.0 + (noise(gp * 1.2 + vec2(uTime * 0.08, -uTime * 0.05)) - 0.5) * 0.45 * glitterFade;
     skyReflection *= glitter;
     vec3 color = body + F * skyReflection + directSunSpecular;
 
-    // --- 2.5. PHYSICAL FLUID-ADVECTED FOAM BLENDING ---
+    // --- 2.5. PHYSICAL FLUID-ADVECTED PROCEDURAL FOAM SHADING ---
+    // Confine active foam strictly to breaking crests.
+    // Modulated with high-frequency procedural bubble noise to fragment the flat white sheets into porous cellular foam.
     float foamAmt = texture(uFoam, vUv).r;
+    float activeFoam = smoothstep(0.015, 0.12, foamAmt);
     
-    // Branchless smooth foam blending to prevent hard snap flickering at foamAmt thresholds
-    float activeFoam = smoothstep(0.005, 0.06, foamAmt);
+    // Multi-scale procedural bubble pattern, faded in the distance via local foamFade to prevent aliasing Moire
+    vec2 foamUv1 = vWorld.xz * 1.8 + vec2(0.0, uTime * 0.15);
+    vec2 foamUv2 = vWorld.xz * 4.5 - vec2(uTime * 0.08, 0.0);
+    vec2 foamUv3 = vWorld.xz * 12.0 + vec2(0.0, -uTime * 0.25);
     
-    vec2 fluidDisp = texture(uDisp, vUv).rg;
-    // Turbulence & wave slope-driven foam stretching along gravity/slope normal to simulate shearing
-    vec2 slopeStretch = Ns.xz * (0.35 * smoothstep(0.0, 1.5, length(Ns.xz)));
-    vec2 advectedUV = vWorld.xz + fluidDisp * 1.5 + slopeStretch * 4.5; 
+    float foamFade = clamp(1.0 - (camDist2D / 120.0), 0.0, 1.0);
+    float bubbleNoise = noise(foamUv1) * 0.50 
+                      + noise(foamUv2) * 0.35 * foamFade
+                      + noise(foamUv3) * 0.15 * foamFade * foamFade;
     
-    vec2 uvFoamA = mat2( 0.866,  0.500, -0.500,  0.866) * advectedUV * 0.05 + vec2(uTime * 0.005);
-    vec2 uvFoamB = mat2( 0.707, -0.707,  0.707,  0.707) * advectedUV * 0.12 - vec2(uTime * 0.012);
+    // Cellular bubble thresholding
+    float bubblePattern = smoothstep(0.35, 0.70, bubbleNoise);
     
-    float foamOpA = texture(uFoamOpacity, uvFoamA).r;
-    float foamOpB = texture(uFoamOpacity, uvFoamB).r;
-    float textureOpacity = mix(foamOpA, foamOpB, 0.5);
+    // Physical Airy diffuse scattering of micro-bubbles (white foam body)
+    vec3 foamAlbedo = vec3(0.85, 0.88, 0.90);
+    vec3 foamScatter = uSunColor * (0.50 + 0.50 * NoL) + vec3(0.15, 0.22, 0.30);
+    vec3 foamDiffuse = foamAlbedo * foamScatter * 1.05;
     
-    float foamOpacity = smoothstep(0.1, 0.8, foamAmt) * textureOpacity * 2.8 * activeFoam;
-    foamOpacity = clamp(foamOpacity, 0.0, 1.0);
-    
-    vec3 foamAlbA = texture(uFoamAlbedo, uvFoamA).rgb;
-    vec3 foamAlbB = texture(uFoamAlbedo, uvFoamB).rgb;
-    vec3 foamAlbedo = mix(foamAlbA, foamAlbB, 0.5);
-    
-    // Volumetric thickness self-shadowing based on height and light direction (no offset sampling to prevent cloth/moire alignment)
-    float foamSelfShadow = mix(0.40, 1.0, clamp(NoL * (1.0 + 0.6 * textureOpacity), 0.0, 1.0));
-    vec3 foamScatter = (uSunColor * (0.45 + 0.55 * NoL) + vec3(0.12, 0.18, 0.25)) * foamSelfShadow; 
-    vec3 foamDiffuse = foamAlbedo * foamScatter * 1.15; 
-    
-    // Blend foam continuously without hard if-conditionals
-    color = mix(color, foamDiffuse, foamOpacity * 0.85 * float(uHasFoamTex));
+    // Modulate opacity using the cellular bubblePattern to dissolve uniform white sheets into spray clusters
+    float foamOpacity = clamp(foamAmt * 2.2 * activeFoam * (0.12 + 0.88 * bubblePattern), 0.0, 0.95);
+    color = mix(color, foamDiffuse, foamOpacity);
 
     // --- 3. SHORELINE DEPTH FADE ---
     // Extended range (0.05 → 2.5 m) gives a gradual alpha fade that eliminates
@@ -306,8 +308,9 @@ void main()
         float sssAlign = clamp(dot(-Ns, L), 0.0, 1.0);
         float waveFrontLeak = exp(-EdoBay_Sigma.g * waveThickness * 1.5) * sssAlign * 3.5;
         // Organic Hokusai-style deep blue-green SSS (Edo bay nutrient-rich)
+        // Kept clean and mathematically smooth without noise modulation to block spotty clusters
         vec3 sssTransmission = uSunColor * vec3(0.02, 0.32, 0.22) * (hgPhase * 0.18 + waveFrontLeak * 0.35);
-        color += sssTransmission * crestness * (0.65 + 0.35 * noise(vWorld.xz * 0.8 + vWorld.y * 0.6));
+        color += sssTransmission * crestness;
     }
 
     // Atmospheric Distance Fog — converges to the SAME horizon fog tone the

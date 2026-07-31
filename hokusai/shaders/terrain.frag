@@ -44,9 +44,14 @@ vec3 sampleTriplanar(sampler2D tex, vec3 p, vec3 weights, float sc)
 
 void main()
 {
-    // 1. Smooth Analytic Normal
+    float dist = length(vec3(0.0, 100.0, -350.0) - vWorld);
+    
+    // 1. Smooth Analytic Normal (Stabilized in the far field to eliminate vertex jitter popping)
     vec3 N = normalize(vNormal);
     if (N.y < 0.0) N = -N;
+    
+    float farFade = smoothstep(15000.0, 38000.0, dist);
+    N = normalize(mix(N, vec3(0.0, 1.0, 0.0), farFade * 0.72));
 
     vec3 L = normalize(uSunDir);
     vec3 V = normalize(uCamPos - vWorld);
@@ -56,7 +61,6 @@ void main()
     float NoL = NoL_raw * 0.5 + 0.5;
     NoL = NoL * NoL; // Squared for realistic contrast transition
 
-    float dist = length(vec3(0.0, 100.0, -350.0) - vWorld);
     // 2. Triplanar Texturing (Faded to static flat projection in the distance to prevent normal jitter clicks)
     vec3 blendWeights = pow(abs(N), vec3(4.0));
     blendWeights /= (blendWeights.x + blendWeights.y + blendWeights.z + 1e-4);
@@ -86,12 +90,18 @@ void main()
     vec3 akatsuchiScoria = rockAlbedo * vec3(0.65, 0.45, 0.35);
     float soilMix = noise(vWorld.xz * 0.005) * 0.5 + noise(vWorld.xz * 0.02) * 0.5;
     vec3 baseFujiSoil = mix(kurobokudoSoil, akatsuchiScoria, smoothstep(0.25, 0.75, soilMix));
+    // Apply organic micro-detail breakup to close-range soil to eliminate artificial plastic look
+    float microSoilDetail = noise(vWorld.xz * 0.45) * 0.15 + noise(vWorld.xz * 1.5) * 0.08;
+    baseFujiSoil *= (1.0 - microSoilDetail * (1.0 - triplanarFade));
 
     // Flora
     vec3 cedarAlbedo = rockAlbedo * vec3(0.25, 0.45, 0.25);
     vec3 oakAlbedo   = rockAlbedo * vec3(0.35, 0.55, 0.30);
     float speciesMix1 = noise(vWorld.xz * 0.015);
     vec3 lowWoodlandAlbedo = mix(cedarAlbedo, oakAlbedo, speciesMix1);
+    // Add micro-foliage fiber shading to close-range woodland to destroy flat textures
+    float microVegDetail = noise(vWorld.xz * 0.85) * 0.18;
+    lowWoodlandAlbedo *= (1.0 - microVegDetail * (1.0 - triplanarFade));
 
     vec3 veitchFirAlbedo = rockAlbedo * vec3(0.15, 0.35, 0.32);
     vec3 ermanBirchAlbedo = rockAlbedo * vec3(0.45, 0.60, 0.28);
@@ -111,8 +121,9 @@ void main()
     float vegDensity = elevGrad * slopeGrad * (0.4 + 0.6 * fbm);
 
     // Volcanic Radial Erosion Channels (Sharp gullies carved along volcanic slopes)
-    // Dynamic LOD: fade high-frequency noise bands at 70km distance to prevent sub-pixel popping.
-    float lodFactor = clamp(1.0 - (dist / 85000.0), 0.0, 1.0);
+    // Shrunk LOD divisor to 32km to guarantee all micro-drift and erosion noise is completely frozen on far terrain.
+    // At Mt. Fuji (70km away), lodFactor will be mathematically 0.0, preventing temporal sub-pixel edge flickering.
+    float lodFactor = clamp(1.0 - (dist / 32000.0), 0.0, 1.0);
     // Anchored polar angle to static world-space coordinates instead of dynamic normals
     // to completely eliminate high-frequency erosion noise snapping on sharp ridges.
     float polarAngle = atan(vWorld.z, vWorld.x);
@@ -121,7 +132,7 @@ void main()
                      + noise(vec2(polarAngle * 54.0, 0.0)) * 0.125 * lodFactor * lodFactor;
     // Widened slope transition to prevent sharp ridge normal jitter from snapping color layers
     float slopeIntensity = smoothstep(0.10, 0.95, 1.0 - N.y);
-    float erosionFactor = erosionFbm * slopeIntensity * smoothstep(1000.0, 3776.0, vElev);
+    float erosionFactor = erosionFbm * slopeIntensity * smoothstep(1000.0, 3776.0, vElev) * lodFactor;
     
     // Apply erosion weathering to soil/rock albedo (darkens the gullies)
     vec3 weatheredSoil = baseFujiSoil * (1.0 - erosionFactor * 0.45);
@@ -138,18 +149,20 @@ void main()
                   + noise(vWorld.xz * 0.24) * 0.2 * lodFactor * lodFactor;
     
     // NW wind shears the snow coverage across the summit slopes.
-    // Use the smooth unperturbed normal (smoothN) to completely avoid geometry-snapping flickers.
-    vec3 smoothN = normalize(vNormal);
+    // Safe normalization guard prevents NaN cracks on sharp ridge vertices where interpolating normals sum to near-zero.
+    float len = length(vNormal);
+    vec3 smoothN = len > 1e-5 ? vNormal / len : vec3(0.0, 1.0, 0.0);
     if (smoothN.y < 0.0) smoothN = -smoothN;
-    float windShear = dot(smoothN.xz, vec2(-0.707, 0.707)) * 80.0;
+    smoothN = normalize(mix(smoothN, vec3(0.0, 1.0, 0.0), farFade * 0.72));
+    float windShear = dot(smoothN.xz, vec2(-0.707, 0.707)) * 80.0 * lodFactor;
     
     // Snow clings deeply into upper valleys/erosion gullies (erosionFactor) and clears on steep cliffs (smoothN.y)
-    float snowN = smoothN.y * (1.1 + 0.3 * snowFbm) + erosionFactor * 0.45;
+    float snowN = smoothN.y * (1.1 + 0.3 * snowFbm * lodFactor) + erosionFactor * 0.45;
     
     // Raise the base snow line from 3150m to 3150m to confine snow to the top peak zone.
-    float snowLine = 3150.0 + windShear + snowFbm * 280.0 - erosionFactor * 350.0;
-    // Widened transition width from 120.0 to 250.0 to guarantee buttery-smooth gradients without flickers
-    float snowAmt = smoothstep(snowLine - 250.0, snowLine + 250.0, vElev) * smoothstep(0.40, 0.72, snowN);
+    float snowLine = 3150.0 + windShear + snowFbm * 280.0 * lodFactor - erosionFactor * 350.0 * lodFactor;
+    // Widened slope transition to guarantee buttery-smooth gradients without sharp flickering or interpolation cracks
+    float snowAmt = smoothstep(snowLine - 250.0, snowLine + 250.0, vElev) * smoothstep(0.15, 0.85, snowN);
     snowAmt = clamp(snowAmt, 0.0, 1.0);
     
     // Micro wind-blown ripples on the snow surface - smoothed with LOD
@@ -157,7 +170,9 @@ void main()
     // Subsurface Scattering (SSS) inside the snow layer - subtle blue/cyan light transmission (using smoothN to stop popping)
     vec3 snowSSS = vec3(0.08, 0.18, 0.28) * clamp(dot(-smoothN, L), 0.0, 1.0) * (0.35 + 0.65 * snowFbm);
     vec3 snowC = vec3(0.92, 0.94, 0.96) + snowRipples;
-    vec3 snowLighting = snowC * (0.35 + 0.65 * NoL) + snowSSS * uSunColor * 0.40;
+    // Uses smoothN instead of perturbed N for snow diffuse lighting to prevent severe temporal flickering (gray-white popping) on the peaks
+    float snowNoL = clamp(dot(smoothN, L), 0.0, 1.0);
+    vec3 snowLighting = snowC * (0.35 + 0.65 * snowNoL) + snowSSS * uSunColor * 0.40;
     col = mix(col, snowLighting, snowAmt);
 
     // 6. Wet Shoreline (Wet sand & dark damp rock effect near sea level)
@@ -177,8 +192,12 @@ void main()
     float heightFalloff = 0.0016; 
     float smoothY = 0.5 * (vWorld.y + sqrt(vWorld.y * vWorld.y + 400.0)); // C1 continuous soft-max
     // Soften silhouette edges against the sky by blending long-range fog towards 1.0
+    // Tuned to 0.38 (was 0.88) to preserve Mt. Fuji's crisp epic contour while suppressing edge jitter
     float fogHaze = 1.0 - exp(-dist * fogDensity * exp(-smoothY * heightFalloff));
-    fogHaze = mix(fogHaze, 1.0, smoothstep(45000.0, 90000.0, dist) * 0.15); // Smoothly fade distant silhouette borders
+    // Inject a subtle ambient moisture fog layer at close-range (up to 3.5km) to elevate depth perception
+    float nearFog = 0.038 * (1.0 - smoothstep(0.0, 3500.0, dist));
+    fogHaze = max(fogHaze, nearFog);
+    fogHaze = mix(fogHaze, 1.0, smoothstep(45000.0, 75000.0, dist) * 0.38); // Smoothly fade distant silhouette borders
     col = mix(col, uHorizonCol, fogHaze);
 
     fragColor = vec4(col, 1.0);
